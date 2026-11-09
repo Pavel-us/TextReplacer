@@ -1,0 +1,22 @@
+{
+  "name": "text-replacer",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icons": "tauri icon app-icon.png",
+    "check:locales": "node scripts/check-locales.mjs",
+    "test": "npm run check:locales && cargo test --manifest-path src-tauri/Cargo.toml"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  },
+  "description": "Find and replace text in files: plain text, Word, Excel, PowerPoint, LibreOffice, PDF",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pavel-us/TextReplacer.git"
+  }
+}

@@ -1,0 +1,28 @@
+name: Bug report / Сообщить об ошибке
+description: Something does not work as expected / Что-то работает не так
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened? / Что произошло?
+      description: Steps to reproduce, expected and actual result. / Шаги, ожидаемый и фактический результат.
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: File format / Формат файла
+      options: [Plain text, docx, xlsx, pptx, odt/ods/odp, pdf, Other / Другой]
+  - type: input
+    id: os
+    attributes:
+      label: OS and app version / ОС и версия приложения
+      placeholder: "Ubuntu 24.04, Text Replacer 1.0.0"
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample / Пример
+      description: Search text, replacement text and options used (do not attach private files). / Текст поиска и замены, настройки (не прикладывайте личные файлы).

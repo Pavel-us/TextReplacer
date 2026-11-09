@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Text Replacer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">T</div>
+      <div>
+        <h1>Text Replacer</h1>
+        <p class="muted" data-i18n="app.subtitle"></p>
+      </div>
+    </div>
+
+    <label class="lbl" for="folder" data-i18n="folder.label"></label>
+    <div class="row">
+      <input id="folder" type="text" data-i18n-ph="folder.placeholder" spellcheck="false">
+      <button id="browse" class="btn" data-i18n="folder.browse"></button>
+    </div>
+
+    <label class="lbl" for="mask" data-i18n="mask.label"></label>
+    <input id="mask" type="text" value="*" placeholder="*.html;*.txt" spellcheck="false">
+
+    <div id="switches" class="switches"></div>
+
+    <label class="lbl" for="maxsize" data-i18n="maxsize.label"></label>
+    <input id="maxsize" type="number" min="0" step="1" value="100">
+
+    <div class="spacer"></div>
+
+    <label class="lbl" for="lang" data-i18n="lang.label"></label>
+    <div class="row">
+      <select id="lang"></select>
+      <button id="openLoc" class="btn" data-i18n-title="lang.open_title">📂</button>
+    </div>
+
+    <label class="lbl" for="theme" data-i18n="theme.label"></label>
+    <select id="theme">
+      <option value="system" data-i18n="theme.system"></option>
+      <option value="dark" data-i18n="theme.dark"></option>
+      <option value="light" data-i18n="theme.light"></option>
+    </select>
+  </aside>
+
+  <main class="main">
+    <section class="editors">
+      <div>
+        <label class="lbl" for="find" data-i18n="find.label"></label>
+        <textarea id="find" wrap="off" spellcheck="false"></textarea>
+      </div>
+      <div>
+        <label class="lbl" for="repl" data-i18n="repl.label"></label>
+        <textarea id="repl" wrap="off" spellcheck="false"></textarea>
+      </div>
+    </section>
+
+    <div class="row gap">
+      <button id="addRule" class="btn" data-i18n="btn.add"></button>
+      <button id="loadRules" class="btn" data-i18n="btn.load"></button>
+      <span class="muted small" data-i18n="rules.hint"></span>
+    </div>
+
+    <div id="rules" class="rules"></div>
+
+    <div class="row gap actions">
+      <button id="dry" class="btn" data-i18n="btn.preview"></button>
+      <button id="run" class="btn primary" data-i18n="btn.run"></button>
+      <div id="spinner" class="spinner hidden" aria-hidden="true"></div>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <div id="stats" class="stats"></div>
+
+    <div class="results">
+      <table>
+        <thead>
+          <tr>
+            <th data-i18n="results.th.file"></th>
+            <th class="num" data-i18n="results.th.count"></th>
+            <th data-i18n="results.th.status"></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty muted"></div>
+    </div>
+  </main>
+</div>
+
+<div id="drop" class="drop hidden"><div data-i18n="drop.hint"></div></div>
+<script src="main.js"></script>
+</body>
+</html>
