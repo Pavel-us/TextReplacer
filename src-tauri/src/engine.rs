@@ -11,8 +11,10 @@ use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 use zip::{write::SimpleFileOptions, CompressionMethod};
 
@@ -27,7 +29,7 @@ pub struct Rule {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Request {
     pub folder: String,
     pub mask: String,
@@ -41,6 +43,10 @@ pub struct Request {
     pub dry: bool,
     /// 0 = no limit
     pub max_size_mb: u64,
+    /// Legacy binary formats (.doc/.xls/.ppt/.rtf) via LibreOffice: "skip" | "modern" | "inplace"
+    pub legacy: String,
+    /// Optional path to soffice (or the LibreOffice folder); empty = auto-detect
+    pub soffice_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -690,6 +696,268 @@ fn process_pdf(_p: &Path, _m: &fs::Metadata, _r: &[Compiled], _o: &Request) -> R
     Ok(Outcome::Skipped("skip.no_pdf".into()))
 }
 
+// ───────────── legacy binary formats via LibreOffice (.doc .xls .ppt .rtf) ─────────────
+
+struct LegacyFmt {
+    modern_ext: &'static str,
+    back_ext: &'static str,
+    back_filter: &'static str,
+    kind: Kind,
+}
+
+fn legacy_fmt(path: &Path) -> Option<LegacyFmt> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "doc" => LegacyFmt { modern_ext: "docx", back_ext: "doc", back_filter: "MS Word 97", kind: Kind::Word },
+        "rtf" => LegacyFmt { modern_ext: "docx", back_ext: "rtf", back_filter: "Rich Text Format", kind: Kind::Word },
+        "xls" => LegacyFmt { modern_ext: "xlsx", back_ext: "xls", back_filter: "MS Excel 97", kind: Kind::Excel },
+        "ppt" => LegacyFmt { modern_ext: "pptx", back_ext: "ppt", back_filter: "MS PowerPoint 97", kind: Kind::Slides },
+        _ => return None,
+    })
+}
+
+/// LibreOffice allows one conversion at a time per profile: serialize the calls.
+static LO_LOCK: Mutex<()> = Mutex::new(());
+/// Set after a timeout so the remaining files fail fast instead of waiting again.
+static LO_DEAD: AtomicBool = AtomicBool::new(false);
+const LO_TIMEOUT_SECS: u64 = 120;
+
+/// No console window flashing on Windows.
+fn quiet(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
+/// Kills the whole process tree (soffice is a launcher for soffice.bin).
+fn kill_tree(child: &mut std::process::Child) {
+    let pid = child.id();
+    #[cfg(windows)]
+    {
+        let mut k = Command::new("taskkill");
+        k.args(["/F", "/T", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+        quiet(&mut k);
+        let _ = k.status();
+    }
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-9", "--", &format!("-{pid}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// LibreOffice converts file URLs to paths using the locale charset on Linux/macOS:
+/// in a non-UTF-8 locale non-ASCII paths make it hang. Force a UTF-8 one for the child.
+fn needs_utf8_locale() -> bool {
+    if cfg!(windows) || cfg!(target_os = "macos") {
+        return false; // both always handle UTF-8 paths
+    }
+    let loc = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.is_empty())
+        .unwrap_or_default()
+        .to_lowercase();
+    !(loc.contains("utf-8") || loc.contains("utf8"))
+}
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new() -> std::io::Result<Self> {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "text-replacer-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&p)?;
+        Ok(TempDir(p))
+    }
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Path part of a `file://` URL (percent-encoded; works for Windows drive paths too).
+fn file_url_path(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    let s = if s.starts_with('/') { s } else { format!("/{s}") };
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b':' => out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+fn find_soffice(custom: &str) -> Option<PathBuf> {
+    let exe_names: &[&str] = if cfg!(windows) { &["soffice.exe"] } else { &["soffice", "libreoffice"] };
+    let custom = custom.trim();
+    if !custom.is_empty() {
+        let p = PathBuf::from(custom);
+        if p.is_file() {
+            return Some(p);
+        }
+        if p.is_dir() {
+            for dir in [p.clone(), p.join("program")] {
+                for n in exe_names {
+                    let c = dir.join(n);
+                    if c.is_file() {
+                        return Some(c);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            for n in exe_names {
+                let c = dir.join(n);
+                if c.is_file() {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    let mut cands: Vec<PathBuf> = Vec::new();
+    if cfg!(windows) {
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Some(base) = std::env::var_os(var) {
+                cands.push(PathBuf::from(base).join("LibreOffice").join("program").join("soffice.exe"));
+            }
+        }
+    } else if cfg!(target_os = "macos") {
+        cands.push(PathBuf::from("/Applications/LibreOffice.app/Contents/MacOS/soffice"));
+    } else {
+        for p in [
+            "/usr/bin/soffice",
+            "/usr/bin/libreoffice",
+            "/usr/local/bin/soffice",
+            "/snap/bin/libreoffice",
+            "/opt/libreoffice/program/soffice",
+        ] {
+            cands.push(PathBuf::from(p));
+        }
+    }
+    cands.into_iter().find(|p| p.is_file())
+}
+
+/// Converts `input` into `outdir/<stem>.<ext>` with a headless LibreOffice.
+fn lo_convert(soffice: &Path, input: &Path, outdir: &Path, ext: &str, filter: Option<&str>) -> Res<PathBuf> {
+    fs::create_dir_all(outdir)?;
+    let profile = std::env::temp_dir().join("text-replacer-lo-profile");
+    let target = match filter {
+        Some(f) => format!("{ext}:{f}"),
+        None => ext.to_string(),
+    };
+    let _guard = LO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if LO_DEAD.load(Ordering::Relaxed) {
+        return Err("err.lo_timeout".into());
+    }
+    let mut cmd = Command::new(soffice);
+    cmd.arg(format!("-env:UserInstallation=file://{}", file_url_path(&profile)))
+        .args(["--headless", "--norestore", "--nolockcheck", "--convert-to"])
+        .arg(&target)
+        .arg("--outdir")
+        .arg(outdir)
+        .arg(input)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    quiet(&mut cmd);
+    if needs_utf8_locale() {
+        cmd.env("LC_ALL", "C.UTF-8");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0); // own group, so the whole tree can be killed on timeout
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("err.lo_failed\u{1f}{e}"))?;
+    let t0 = Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                if !status.success() {
+                    return Err(format!("err.lo_failed\u{1f}{status}").into());
+                }
+                break;
+            }
+            None => {
+                if t0.elapsed() > Duration::from_secs(LO_TIMEOUT_SECS) {
+                    kill_tree(&mut child);
+                    LO_DEAD.store(true, Ordering::Relaxed);
+                    return Err("err.lo_timeout".into());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    let stem = input.file_stem().ok_or("err.lo_failed\u{1f}no file name")?;
+    let out = outdir.join(format!("{}.{}", stem.to_string_lossy(), ext));
+    if !out.is_file() {
+        return Err("err.lo_failed\u{1f}output file was not created".into());
+    }
+    Ok(out)
+}
+
+/// .doc/.xls/.ppt/.rtf -> modern format -> replace -> (save next to it | convert back in place).
+fn process_legacy(
+    path: &Path,
+    meta: &fs::Metadata,
+    rules: &[Compiled],
+    o: &Request,
+    soffice: &Path,
+    fmt: &LegacyFmt,
+) -> Res<Outcome> {
+    let tmp = TempDir::new()?;
+    let converted = lo_convert(soffice, path, &tmp.path().join("modern"), fmt.modern_ext, None)?;
+    let mut o2 = o.clone();
+    o2.backup = false;
+    let meta2 = fs::metadata(&converted)?;
+    let n = match process_zip_doc(fmt.kind, &converted, &meta2, rules, &o2)? {
+        Outcome::Changed(n) => n,
+        other => return Ok(other),
+    };
+    if o.dry {
+        return Ok(Outcome::Changed(n));
+    }
+    if o.legacy == "modern" {
+        let dest = path.with_extension(fmt.modern_ext);
+        if dest.exists() {
+            let name = dest.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+            return Err(format!("err.dest_exists\u{1f}{name}").into());
+        }
+        fs::copy(&converted, &dest)?;
+    } else {
+        let back = lo_convert(soffice, &converted, &tmp.path().join("back"), fmt.back_ext, Some(fmt.back_filter))?;
+        let staged = with_suffix(path, ".tmp~");
+        fs::copy(&back, &staged)?;
+        finish_write(path, &staged, meta, o.backup)?;
+    }
+    Ok(Outcome::Changed(n))
+}
+
 // ───────────── folder walk ─────────────
 
 fn glob(p: &[char], t: &[char]) -> bool {
@@ -731,10 +999,22 @@ fn parse_masks(mask: &str) -> Vec<Vec<char>> {
     }
 }
 
-fn process_file(path: &Path, rules: &[Compiled], o: &Request) -> Result<Outcome, String> {
+fn process_file(path: &Path, rules: &[Compiled], o: &Request, lo: Option<&Path>) -> Result<Outcome, String> {
     let meta = fs::metadata(path).map_err(|e| e.to_string())?;
     if o.max_size_mb > 0 && meta.len() > o.max_size_mb.saturating_mul(1024 * 1024) {
         return Ok(Outcome::Skipped(format!("skip.too_big\u{1f}{}", o.max_size_mb)));
+    }
+    if let Some(fmt) = legacy_fmt(path) {
+        if o.legacy == "modern" || o.legacy == "inplace" {
+            return match lo {
+                Some(soffice) => process_legacy(path, &meta, rules, o, soffice, &fmt).map_err(|e| e.to_string()),
+                None => Ok(Outcome::Skipped("skip.no_office".into())),
+            };
+        }
+        // .rtf stays readable as plain text (Latin only); .doc/.xls/.ppt cannot be edited directly
+        if fmt.back_ext != "rtf" {
+            return Ok(Outcome::Skipped("skip.legacy".into()));
+        }
     }
     let r = if let Some(kind) = doc_kind(path) {
         process_zip_doc(kind, path, &meta, rules, o)
@@ -766,6 +1046,11 @@ where
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .filter(|e| {
+            // skip Office/LibreOffice lock files
+            let n = e.file_name().to_string_lossy();
+            !(n.starts_with("~$") || n.starts_with(".~lock."))
+        })
+        .filter(|e| {
             let name: Vec<char> = e.file_name().to_string_lossy().to_lowercase().chars().collect();
             masks.iter().any(|m| glob(m, &name))
         })
@@ -777,9 +1062,14 @@ where
     let skipped = AtomicUsize::new(0);
     let errors = AtomicUsize::new(0);
 
+    let needs_lo = (o.legacy == "modern" || o.legacy == "inplace")
+        && files.iter().any(|p| legacy_fmt(p).is_some());
+    LO_DEAD.store(false, Ordering::Relaxed);
+    let lo: Option<PathBuf> = if needs_lo { find_soffice(&o.soffice_path) } else { None };
+
     files.par_iter().for_each(|p| {
         let path = p.to_string_lossy().to_string();
-        match process_file(p, &rules, o) {
+        match process_file(p, &rules, o, lo.as_deref()) {
             Ok(Outcome::Unchanged) => {}
             Ok(Outcome::Changed(n)) => {
                 changed.fetch_add(1, Ordering::Relaxed);
@@ -961,6 +1251,25 @@ mod tests {
         assert!(b.is_empty());
         let mut z = vec![0u8, 72, 0, 105]; // Identity-H — must stay untouched
         assert_eq!(pdf_impl::edit_strings(vec![&mut z], &c), 0);
+    }
+
+    #[test]
+    fn legacy_formats_detected() {
+        let f = legacy_fmt(Path::new("dir/Report.DOC")).unwrap();
+        assert_eq!((f.modern_ext, f.back_ext), ("docx", "doc"));
+        assert_eq!(legacy_fmt(Path::new("a.xls")).unwrap().modern_ext, "xlsx");
+        assert_eq!(legacy_fmt(Path::new("a.ppt")).unwrap().modern_ext, "pptx");
+        assert!(legacy_fmt(Path::new("a.docx")).is_none());
+        assert!(legacy_fmt(Path::new("noext")).is_none());
+    }
+
+    #[test]
+    fn file_url_is_percent_encoded() {
+        assert_eq!(
+            file_url_path(Path::new("/tmp/a b/Павел")),
+            "/tmp/a%20b/%D0%9F%D0%B0%D0%B2%D0%B5%D0%BB"
+        );
+        assert_eq!(file_url_path(Path::new("C:\\Users\\x")), "/C:/Users/x");
     }
 
     #[test]

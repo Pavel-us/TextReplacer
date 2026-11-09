@@ -107,7 +107,8 @@
     try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; }
   }
   function saveSettings() {
-    const s = { folder: $("folder").value, mask: $("mask").value, maxsize: $("maxsize").value, theme: $("theme").value, lang };
+    const s = { folder: $("folder").value, mask: $("mask").value, maxsize: $("maxsize").value, theme: $("theme").value, lang,
+      legacy: $("legacy").value, sofficePath: $("sofficePath").value };
     for (const [k] of OPTS) s["o_" + k] = $("opt-" + k).checked;
     try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* ignore */ }
   }
@@ -129,6 +130,8 @@
   if (st.maxsize !== undefined) $("maxsize").value = st.maxsize;
   for (const [k] of OPTS) if (("o_" + k) in st) $("opt-" + k).checked = st["o_" + k];
   $("theme").value = st.theme || "system";
+  $("legacy").value = st.legacy || "skip";
+  if (st.sofficePath) $("sofficePath").value = st.sofficePath;
 
   function applyTheme() {
     const v = $("theme").value;
@@ -337,6 +340,7 @@
       ignoreWs: $("opt-ignoreWs").checked, regex: $("opt-regex").checked,
       backup: $("opt-backup").checked, binary: $("opt-binary").checked,
       dry, maxSizeMb: Math.max(0, Math.floor(Number($("maxsize").value) || 0)),
+      legacy: $("legacy").value, sofficePath: $("sofficePath").value.trim(),
     };
 
     lastDry = dry; lastFolder = folder; lastStats = null; pending = [];

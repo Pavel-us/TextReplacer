@@ -69,5 +69,16 @@
   "dlg.nothing": "Nothing to search for: fill in the “Find” field",
   "dlg.no_folder": "Please specify a folder (you can drop it into the window)",
   "dlg.rules_dialog": "Rules file (find<TAB>replace)",
-  "drop.hint": "Drop to select the folder"
+  "drop.hint": "Drop to select the folder",
+  "legacy.label": "Legacy formats (.doc .xls .ppt .rtf) via LibreOffice",
+  "legacy.skip": "Skip",
+  "legacy.modern": "Convert and save as .docx / .xlsx / .pptx",
+  "legacy.inplace": "Edit and save in the same format",
+  "legacy.hint": "Requires LibreOffice. Slower: each file is converted (about 2 s). \"Convert\" leaves the original untouched; \"same format\" overwrites it (enable .bak backups).",
+  "legacy.path_ph": "LibreOffice path (auto-detect if empty)",
+  "skip.legacy": "legacy format — enable LibreOffice conversion",
+  "skip.no_office": "LibreOffice not found (install it or set its path)",
+  "err.lo_failed": "LibreOffice conversion failed: {0}",
+  "err.lo_timeout": "LibreOffice conversion timed out",
+  "err.dest_exists": "{0} already exists"
 }

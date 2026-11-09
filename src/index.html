@@ -31,6 +31,15 @@
     <label class="lbl" for="maxsize" data-i18n="maxsize.label"></label>
     <input id="maxsize" type="number" min="0" step="1" value="100">
 
+    <label class="lbl" for="legacy" data-i18n="legacy.label"></label>
+    <select id="legacy">
+      <option value="skip" data-i18n="legacy.skip"></option>
+      <option value="modern" data-i18n="legacy.modern"></option>
+      <option value="inplace" data-i18n="legacy.inplace"></option>
+    </select>
+    <input id="sofficePath" type="text" data-i18n-ph="legacy.path_ph" spellcheck="false">
+    <p class="muted small hint" data-i18n="legacy.hint"></p>
+
     <div class="spacer"></div>
 
     <label class="lbl" for="lang" data-i18n="lang.label"></label>

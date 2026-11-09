@@ -2,7 +2,13 @@
 
 All notable changes are documented here. / Все заметные изменения описаны здесь.
 
-## [1.0.0] — unreleased / не выпущено
+## [1.1.0] — unreleased / не выпущено
+
+### Added / Добавлено
+- Legacy `.doc` / `.xls` / `.ppt` / `.rtf` support through an installed LibreOffice (convert to a modern format, or edit and save back in the same format).
+  Поддержка старых `.doc` / `.xls` / `.ppt` / `.rtf` через установленный LibreOffice (конвертация в современный формат или правка с сохранением в том же формате).
+
+## [1.0.0] — 2026-11-09
 
 ### Added / Добавлено
 - Desktop app for Windows, Linux and macOS (Tauri 2 + Rust engine).

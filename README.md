@@ -20,6 +20,7 @@ the interface is built with [Tauri](https://tauri.app).
 - Auto-detects encodings (UTF-8, UTF-16, cp1251) and keeps line-ending style (LF / CRLF)
 - Drag-and-drop a folder or file into the window
 - Dark / light / system theme, remembered settings
+- Legacy `.doc` / `.xls` / `.ppt` / `.rtf` through LibreOffice (optional)
 - **Interface languages**: English and Russian, more can be added without rebuilding
 
 ## Supported formats
@@ -31,13 +32,27 @@ the interface is built with [Tauri](https://tauri.app).
 | Excel | xlsx, xlsm, xltx, xltm | string cell values (shared and inline strings) |
 | PowerPoint | pptx, pptm, potx, potm, ppsx, ppsm | slide and notes text |
 | LibreOffice / OpenOffice | odt, ods, odp, odg, ott, ots, otp, otg | `content.xml`, `styles.xml` (incl. headers/footers) |
+| Legacy Office | doc, xls, ppt, rtf | via [LibreOffice](https://www.libreoffice.org) (must be installed) — see below |
 | PDF *(experimental)* | pdf | Latin text in simple fonts only — see below |
 
 In office formats the formatting is preserved even if a phrase is split into runs with different styles.
 A match must lie within one paragraph (in spreadsheets: within one cell).
 Not touched: formulas, sheet names, comments, charts, document properties.
-Legacy binary `.doc` / `.xls` / `.ppt` are not supported — convert them first, e.g.
-`libreoffice --headless --convert-to docx *.doc`.
+
+### Legacy formats (.doc, .xls, .ppt, .rtf)
+
+Binary Word 97 / Excel 97 / PowerPoint 97 files cannot be edited safely in place, so the app uses a
+locally installed **LibreOffice** (detected automatically, or set its path in the sidebar):
+
+1. the file is converted to `.docx` / `.xlsx` / `.pptx` in a temporary folder,
+2. the replacement is done there (formatting and fonts are preserved),
+3. the result is saved according to the chosen mode:
+   - **Convert and save as .docx/.xlsx/.pptx** — a new file is created next to the original, the original is untouched;
+   - **Edit and save in the same format** — the result is converted back and overwrites the original
+     (enable `.bak` backups; LibreOffice re-encodes the file, so rare layout differences are possible).
+
+It is off by default and slower (about 2 seconds per file, files are converted one at a time).
+`.rtf` also works this way, which makes Cyrillic text in RTF searchable.
 
 ### PDF limitations
 
