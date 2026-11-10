@@ -11,10 +11,9 @@ use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 use walkdir::WalkDir;
 use zip::{write::SimpleFileOptions, CompressionMethod};
 
@@ -43,10 +42,8 @@ pub struct Request {
     pub dry: bool,
     /// 0 = no limit
     pub max_size_mb: u64,
-    /// Legacy binary formats (.doc/.xls/.ppt/.rtf) via LibreOffice: "skip" | "modern" | "inplace"
-    pub legacy: String,
-    /// Optional path to soffice (or the LibreOffice folder); empty = auto-detect
-    pub soffice_path: String,
+    /// Convert legacy .doc/.xls/.ppt to .docx/.xlsx/.pptx (the result is saved next to the original)
+    pub convert_legacy: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -256,6 +253,8 @@ fn write_atomic(path: &Path, bytes: &[u8], meta: &fs::Metadata, backup: bool) ->
 enum Outcome {
     Unchanged,
     Changed(usize),
+    /// Legacy file converted to a new file: (replacements, new file name)
+    Converted(usize, String),
     Skipped(String),
 }
 
@@ -385,6 +384,10 @@ fn push_range(full: &str, bounds: &[(usize, usize)], out: &mut [String], a: usiz
 
 /// Replaces in text glued together from pieces (runs), keeping the formatting boundaries.
 fn replace_in_runs(runs: &[String], c: &Compiled) -> (Vec<String>, usize) {
+    replace_in_runs_nl(runs, c, " ")
+}
+
+fn replace_in_runs_nl(runs: &[String], c: &Compiled, nl: &str) -> (Vec<String>, usize) {
     let full: String = runs.concat();
     let caps: Vec<Captures> = c
         .re
@@ -409,7 +412,7 @@ fn replace_in_runs(runs: &[String], c: &Compiled) -> (Vec<String>, usize) {
             .iter()
             .position(|&(s, e)| w.start() >= s && w.start() < e)
             .unwrap_or(0);
-        out[owner].push_str(&c.expand(m, " "));
+        out[owner].push_str(&c.expand(m, nl));
         cur = w.end();
     }
     push_range(&full, &bounds, &mut out, cur, full.len());
@@ -417,9 +420,13 @@ fn replace_in_runs(runs: &[String], c: &Compiled) -> (Vec<String>, usize) {
 }
 
 fn apply_to_runs(runs: &mut Vec<String>, rules: &[Compiled]) -> usize {
+    apply_to_runs_nl(runs, rules, " ")
+}
+
+fn apply_to_runs_nl(runs: &mut Vec<String>, rules: &[Compiled], nl: &str) -> usize {
     let mut total = 0usize;
     for c in rules {
-        let (r, n) = replace_in_runs(runs, c);
+        let (r, n) = replace_in_runs_nl(runs, c, nl);
         if n > 0 {
             *runs = r;
             total += n;
@@ -696,80 +703,21 @@ fn process_pdf(_p: &Path, _m: &fs::Metadata, _r: &[Compiled], _o: &Request) -> R
     Ok(Outcome::Skipped("skip.no_pdf".into()))
 }
 
-// ───────────── legacy binary formats via LibreOffice (.doc .xls .ppt .rtf) ─────────────
+// ───────────── legacy binary formats (.doc .xls .ppt): built-in converter ─────────────
 
 struct LegacyFmt {
     modern_ext: &'static str,
-    back_ext: &'static str,
-    back_filter: &'static str,
     kind: Kind,
 }
 
 fn legacy_fmt(path: &Path) -> Option<LegacyFmt> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     Some(match ext.as_str() {
-        "doc" => LegacyFmt { modern_ext: "docx", back_ext: "doc", back_filter: "MS Word 97", kind: Kind::Word },
-        "rtf" => LegacyFmt { modern_ext: "docx", back_ext: "rtf", back_filter: "Rich Text Format", kind: Kind::Word },
-        "xls" => LegacyFmt { modern_ext: "xlsx", back_ext: "xls", back_filter: "MS Excel 97", kind: Kind::Excel },
-        "ppt" => LegacyFmt { modern_ext: "pptx", back_ext: "ppt", back_filter: "MS PowerPoint 97", kind: Kind::Slides },
+        "doc" => LegacyFmt { modern_ext: "docx", kind: Kind::Word },
+        "xls" => LegacyFmt { modern_ext: "xlsx", kind: Kind::Excel },
+        "ppt" => LegacyFmt { modern_ext: "pptx", kind: Kind::Slides },
         _ => return None,
     })
-}
-
-/// LibreOffice allows one conversion at a time per profile: serialize the calls.
-static LO_LOCK: Mutex<()> = Mutex::new(());
-/// Set after a timeout so the remaining files fail fast instead of waiting again.
-static LO_DEAD: AtomicBool = AtomicBool::new(false);
-const LO_TIMEOUT_SECS: u64 = 120;
-
-/// No console window flashing on Windows.
-fn quiet(cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = cmd;
-    }
-}
-
-/// Kills the whole process tree (soffice is a launcher for soffice.bin).
-fn kill_tree(child: &mut std::process::Child) {
-    let pid = child.id();
-    #[cfg(windows)]
-    {
-        let mut k = Command::new("taskkill");
-        k.args(["/F", "/T", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
-        quiet(&mut k);
-        let _ = k.status();
-    }
-    #[cfg(unix)]
-    {
-        let _ = Command::new("kill")
-            .args(["-9", "--", &format!("-{pid}")])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// LibreOffice converts file URLs to paths using the locale charset on Linux/macOS:
-/// in a non-UTF-8 locale non-ASCII paths make it hang. Force a UTF-8 one for the child.
-fn needs_utf8_locale() -> bool {
-    if cfg!(windows) || cfg!(target_os = "macos") {
-        return false; // both always handle UTF-8 paths
-    }
-    let loc = ["LC_ALL", "LC_CTYPE", "LANG"]
-        .iter()
-        .filter_map(|k| std::env::var(k).ok())
-        .find(|v| !v.is_empty())
-        .unwrap_or_default()
-        .to_lowercase();
-    !(loc.contains("utf-8") || loc.contains("utf8"))
 }
 
 struct TempDir(PathBuf);
@@ -796,142 +744,35 @@ impl Drop for TempDir {
     }
 }
 
-/// Path part of a `file://` URL (percent-encoded; works for Windows drive paths too).
-fn file_url_path(p: &Path) -> String {
-    let s = p.to_string_lossy().replace('\\', "/");
-    let s = if s.starts_with('/') { s } else { format!("/{s}") };
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b':' => out.push(b as char),
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
+/// Converts a legacy file into its modern equivalent with the `office_oxide` crate.
+/// A panic inside the parser is turned into an ordinary error.
+fn convert_legacy(src: &Path, dst: &Path) -> Res<()> {
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), String> {
+        let doc = office_oxide::Document::open(src).map_err(|e| e.to_string())?;
+        doc.save_as(dst).map_err(|e| e.to_string())
+    }));
+    match r {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("err.convert_failed\u{1f}{e}").into()),
+        Err(_) => Err("err.convert_failed\u{1f}internal error".into()),
     }
-    out
 }
 
-fn find_soffice(custom: &str) -> Option<PathBuf> {
-    let exe_names: &[&str] = if cfg!(windows) { &["soffice.exe"] } else { &["soffice", "libreoffice"] };
-    let custom = custom.trim();
-    if !custom.is_empty() {
-        let p = PathBuf::from(custom);
-        if p.is_file() {
-            return Some(p);
-        }
-        if p.is_dir() {
-            for dir in [p.clone(), p.join("program")] {
-                for n in exe_names {
-                    let c = dir.join(n);
-                    if c.is_file() {
-                        return Some(c);
-                    }
-                }
-            }
-        }
+/// .doc/.xls/.ppt -> temporary .docx/.xlsx/.pptx -> replace -> save next to the original.
+/// The original file is never touched.
+fn process_legacy(path: &Path, rules: &[Compiled], o: &Request, fmt: &LegacyFmt) -> Res<Outcome> {
+    let dest = path.with_extension(fmt.modern_ext);
+    if dest.exists() {
+        let name = dest.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+        return Ok(Outcome::Skipped(format!("skip.dest_exists\u{1f}{name}")));
     }
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            for n in exe_names {
-                let c = dir.join(n);
-                if c.is_file() {
-                    return Some(c);
-                }
-            }
-        }
-    }
-    let mut cands: Vec<PathBuf> = Vec::new();
-    if cfg!(windows) {
-        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
-            if let Some(base) = std::env::var_os(var) {
-                cands.push(PathBuf::from(base).join("LibreOffice").join("program").join("soffice.exe"));
-            }
-        }
-    } else if cfg!(target_os = "macos") {
-        cands.push(PathBuf::from("/Applications/LibreOffice.app/Contents/MacOS/soffice"));
-    } else {
-        for p in [
-            "/usr/bin/soffice",
-            "/usr/bin/libreoffice",
-            "/usr/local/bin/soffice",
-            "/snap/bin/libreoffice",
-            "/opt/libreoffice/program/soffice",
-        ] {
-            cands.push(PathBuf::from(p));
-        }
-    }
-    cands.into_iter().find(|p| p.is_file())
-}
-
-/// Converts `input` into `outdir/<stem>.<ext>` with a headless LibreOffice.
-fn lo_convert(soffice: &Path, input: &Path, outdir: &Path, ext: &str, filter: Option<&str>) -> Res<PathBuf> {
-    fs::create_dir_all(outdir)?;
-    let profile = std::env::temp_dir().join("text-replacer-lo-profile");
-    let target = match filter {
-        Some(f) => format!("{ext}:{f}"),
-        None => ext.to_string(),
-    };
-    let _guard = LO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if LO_DEAD.load(Ordering::Relaxed) {
-        return Err("err.lo_timeout".into());
-    }
-    let mut cmd = Command::new(soffice);
-    cmd.arg(format!("-env:UserInstallation=file://{}", file_url_path(&profile)))
-        .args(["--headless", "--norestore", "--nolockcheck", "--convert-to"])
-        .arg(&target)
-        .arg("--outdir")
-        .arg(outdir)
-        .arg(input)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    quiet(&mut cmd);
-    if needs_utf8_locale() {
-        cmd.env("LC_ALL", "C.UTF-8");
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0); // own group, so the whole tree can be killed on timeout
-    }
-    let mut child = cmd.spawn().map_err(|e| format!("err.lo_failed\u{1f}{e}"))?;
-    let t0 = Instant::now();
-    loop {
-        match child.try_wait()? {
-            Some(status) => {
-                if !status.success() {
-                    return Err(format!("err.lo_failed\u{1f}{status}").into());
-                }
-                break;
-            }
-            None => {
-                if t0.elapsed() > Duration::from_secs(LO_TIMEOUT_SECS) {
-                    kill_tree(&mut child);
-                    LO_DEAD.store(true, Ordering::Relaxed);
-                    return Err("err.lo_timeout".into());
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        }
-    }
-    let stem = input.file_stem().ok_or("err.lo_failed\u{1f}no file name")?;
-    let out = outdir.join(format!("{}.{}", stem.to_string_lossy(), ext));
-    if !out.is_file() {
-        return Err("err.lo_failed\u{1f}output file was not created".into());
-    }
-    Ok(out)
-}
-
-/// .doc/.xls/.ppt/.rtf -> modern format -> replace -> (save next to it | convert back in place).
-fn process_legacy(
-    path: &Path,
-    meta: &fs::Metadata,
-    rules: &[Compiled],
-    o: &Request,
-    soffice: &Path,
-    fmt: &LegacyFmt,
-) -> Res<Outcome> {
     let tmp = TempDir::new()?;
-    let converted = lo_convert(soffice, path, &tmp.path().join("modern"), fmt.modern_ext, None)?;
+    let stem = path
+        .file_stem()
+        .map(|x| x.to_string_lossy().to_string())
+        .unwrap_or_else(|| "document".to_string());
+    let converted = tmp.path().join(format!("{stem}.{}", fmt.modern_ext));
+    convert_legacy(path, &converted)?;
     let mut o2 = o.clone();
     o2.backup = false;
     let meta2 = fs::metadata(&converted)?;
@@ -942,18 +783,448 @@ fn process_legacy(
     if o.dry {
         return Ok(Outcome::Changed(n));
     }
-    if o.legacy == "modern" {
-        let dest = path.with_extension(fmt.modern_ext);
-        if dest.exists() {
-            let name = dest.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
-            return Err(format!("err.dest_exists\u{1f}{name}").into());
+    fs::copy(&converted, &dest)?;
+    let name = dest.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+    Ok(Outcome::Converted(n, name))
+}
+
+// ───────────── RTF: edited in place, formatting is kept ─────────────
+
+fn is_rtf(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("rtf"))
+        .unwrap_or(false)
+}
+
+fn hexval(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn rtf_encoding(cp: i64) -> Option<&'static encoding_rs::Encoding> {
+    Some(match cp {
+        1250 => encoding_rs::WINDOWS_1250,
+        1251 => encoding_rs::WINDOWS_1251,
+        1252 => encoding_rs::WINDOWS_1252,
+        1253 => encoding_rs::WINDOWS_1253,
+        1254 => encoding_rs::WINDOWS_1254,
+        1255 => encoding_rs::WINDOWS_1255,
+        1256 => encoding_rs::WINDOWS_1256,
+        1257 => encoding_rs::WINDOWS_1257,
+        1258 => encoding_rs::WINDOWS_1258,
+        874 => encoding_rs::WINDOWS_874,
+        866 => encoding_rs::IBM866,
+        10000 => encoding_rs::MACINTOSH,
+        10007 => encoding_rs::X_MAC_CYRILLIC,
+        20866 => encoding_rs::KOI8_R,
+        21866 => encoding_rs::KOI8_U,
+        _ => return None,
+    })
+}
+
+/// Font charset (\fcharsetN) -> code page. None = use the document default (\ansicpgN).
+fn charset_cp(cs: i64) -> Option<i64> {
+    match cs {
+        0 | 1 => None,
+        238 => Some(1250),
+        204 => Some(1251),
+        161 => Some(1253),
+        162 => Some(1254),
+        177 => Some(1255),
+        178 => Some(1256),
+        186 => Some(1257),
+        163 => Some(1258),
+        222 => Some(874),
+        _ => Some(-1), // multi-byte or symbol charsets are not supported
+    }
+}
+
+/// Destinations whose content is not document text.
+const RTF_SKIP: &[&str] = &[
+    "fonttbl", "colortbl", "stylesheet", "info", "pict", "object", "objdata", "themedata",
+    "colorschememapping", "latentstyles", "datastore", "xmlnstbl", "listtable",
+    "listoverridetable", "rsidtbl", "generator", "fldinst", "revtbl", "template", "private",
+    "sn", "sv", "operator",
+];
+
+/// One character of document text and the bytes it occupies in the RTF source.
+#[derive(Clone)]
+struct RtfAtom {
+    start: usize,
+    end: usize,
+    ch: char,
+    /// \ucN in effect (number of fallback characters after \uN)
+    uc: usize,
+}
+
+#[derive(Clone)]
+struct RtfGroup {
+    font: Option<i64>,
+    uc: usize,
+    skip: bool,
+}
+
+/// Splits RTF into text atoms. Segments are separated by "barriers" (paragraph, cell, ...
+/// or unsupported characters): a match never spans a barrier. Formatting control words
+/// are transparent, so text split by bold/italic changes is still found.
+fn rtf_segments(data: &[u8]) -> Vec<Vec<RtfAtom>> {
+    fn push(segs: &mut Vec<Vec<RtfAtom>>, start: usize, end: usize, ch: char, uc: usize) {
+        if let Some(last) = segs.last_mut() {
+            last.push(RtfAtom { start, end, ch, uc });
         }
-        fs::copy(&converted, &dest)?;
-    } else {
-        let back = lo_convert(soffice, &converted, &tmp.path().join("back"), fmt.back_ext, Some(fmt.back_filter))?;
-        let staged = with_suffix(path, ".tmp~");
-        fs::copy(&back, &staged)?;
-        finish_write(path, &staged, meta, o.backup)?;
+    }
+    fn barrier(segs: &mut Vec<Vec<RtfAtom>>) {
+        if segs.last().map(|s| !s.is_empty()).unwrap_or(false) {
+            segs.push(Vec::new());
+        }
+    }
+
+    let n = data.len();
+    let mut segs: Vec<Vec<RtfAtom>> = vec![Vec::new()];
+    let mut stack: Vec<RtfGroup> = Vec::new();
+    let mut cur = RtfGroup { font: None, uc: 1, skip: false };
+    let mut ansi_cp: i64 = 1252;
+    let mut font_cs: HashMap<i64, i64> = HashMap::new();
+    let mut pending_font: Option<i64> = None;
+    let mut group_start = false;
+    let mut i = 0usize;
+
+    while i < n {
+        let b = data[i];
+        match b {
+            b'{' => {
+                stack.push(cur.clone());
+                group_start = true;
+                i += 1;
+            }
+            b'}' => {
+                if let Some(g) = stack.pop() {
+                    cur = g;
+                }
+                group_start = false;
+                i += 1;
+            }
+            b'\r' | b'\n' => i += 1,
+            b'\\' => {
+                if i + 1 >= n {
+                    break;
+                }
+                let c = data[i + 1];
+                if c.is_ascii_alphabetic() {
+                    // control word: \word[-N][ ]
+                    let ws = i + 1;
+                    let mut j = ws;
+                    while j < n && data[j].is_ascii_alphabetic() {
+                        j += 1;
+                    }
+                    let w = std::str::from_utf8(&data[ws..j]).unwrap_or("");
+                    let mut k = j;
+                    let neg = k < n && data[k] == b'-';
+                    if neg {
+                        k += 1;
+                    }
+                    let ds = k;
+                    while k < n && data[k].is_ascii_digit() {
+                        k += 1;
+                    }
+                    let param: Option<i64> = if k > ds {
+                        std::str::from_utf8(&data[ds..k])
+                            .ok()
+                            .and_then(|t| t.parse::<i64>().ok())
+                            .map(|v| if neg { -v } else { v })
+                    } else {
+                        k = j;
+                        None
+                    };
+                    let mut end = k;
+                    if end < n && data[end] == b' ' {
+                        end += 1; // delimiter
+                    }
+                    let first = group_start;
+                    group_start = false;
+                    let mut next = end;
+                    if first && RTF_SKIP.contains(&w) {
+                        cur.skip = true;
+                    }
+
+                    let special: Option<char> = match w {
+                        "tab" => Some('\t'),
+                        "emdash" => Some('\u{2014}'),
+                        "endash" => Some('\u{2013}'),
+                        "bullet" => Some('\u{2022}'),
+                        "lquote" => Some('\u{2018}'),
+                        "rquote" => Some('\u{2019}'),
+                        "ldblquote" => Some('\u{201C}'),
+                        "rdblquote" => Some('\u{201D}'),
+                        _ => None,
+                    };
+                    if let Some(ch) = special {
+                        if !cur.skip {
+                            push(&mut segs, i, end, ch, cur.uc);
+                        }
+                    } else {
+                        match w {
+                            "f" => {
+                                if let Some(p) = param {
+                                    cur.font = Some(p);
+                                    pending_font = Some(p);
+                                }
+                            }
+                            "fcharset" => {
+                                if let (Some(pf), Some(p)) = (pending_font, param) {
+                                    font_cs.insert(pf, p);
+                                }
+                            }
+                            "ansicpg" => {
+                                if let Some(p) = param {
+                                    ansi_cp = p;
+                                }
+                            }
+                            "uc" => {
+                                if let Some(p) = param {
+                                    cur.uc = p.max(0) as usize;
+                                }
+                            }
+                            "bin" => {
+                                if let Some(p) = param {
+                                    if p > 0 {
+                                        next = (end + p as usize).min(n);
+                                    }
+                                }
+                            }
+                            "u" => {
+                                if let Some(p) = param {
+                                    let code = if p < 0 { p + 65536 } else { p };
+                                    let mut e = end;
+                                    let mut cnt = cur.uc;
+                                    while cnt > 0 && e < n {
+                                        let c0 = data[e];
+                                        if c0 == b'\\' && e + 1 < n && data[e + 1] == b'\'' {
+                                            e = (e + 4).min(n);
+                                        } else if c0 == b'\\' || c0 == b'{' || c0 == b'}' {
+                                            break;
+                                        } else if c0 == b'\r' || c0 == b'\n' {
+                                            e += 1;
+                                            continue;
+                                        } else {
+                                            e += 1;
+                                        }
+                                        cnt -= 1;
+                                    }
+                                    if !cur.skip {
+                                        match u32::try_from(code).ok().and_then(char::from_u32) {
+                                            Some(ch) => push(&mut segs, i, e, ch, cur.uc),
+                                            None => barrier(&mut segs),
+                                        }
+                                    }
+                                    next = e;
+                                }
+                            }
+                            "par" | "line" | "cell" | "row" | "nestcell" | "nestrow" | "sect"
+                            | "page" | "column" | "lbr" => {
+                                if !cur.skip {
+                                    barrier(&mut segs);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    i = next;
+                } else {
+                    match c {
+                        b'\\' | b'{' | b'}' => {
+                            if !cur.skip {
+                                push(&mut segs, i, i + 2, c as char, cur.uc);
+                            }
+                            group_start = false;
+                            i += 2;
+                        }
+                        b'\'' => {
+                            let hv = if i + 3 < n {
+                                (hexval(data[i + 2]), hexval(data[i + 3]))
+                            } else {
+                                (None, None)
+                            };
+                            if let (Some(h), Some(l)) = hv {
+                                if !cur.skip {
+                                    let byte = h * 16 + l;
+                                    let cp = cur
+                                        .font
+                                        .and_then(|f| font_cs.get(&f).copied())
+                                        .and_then(charset_cp)
+                                        .unwrap_or(ansi_cp);
+                                    match rtf_encoding(cp) {
+                                        Some(enc) => {
+                                            let buf = [byte];
+                                            let (txt, _) = enc.decode_without_bom_handling(&buf);
+                                            let mut it = txt.chars();
+                                            match (it.next(), it.next()) {
+                                                (Some(ch), None) if ch != '\u{FFFD}' => {
+                                                    push(&mut segs, i, i + 4, ch, cur.uc)
+                                                }
+                                                _ => barrier(&mut segs),
+                                            }
+                                        }
+                                        None => barrier(&mut segs),
+                                    }
+                                }
+                                i += 4;
+                            } else {
+                                i += 2;
+                            }
+                            group_start = false;
+                        }
+                        b'*' => {
+                            if group_start {
+                                cur.skip = true; // ignorable destination
+                            }
+                            i += 2;
+                        }
+                        b'~' => {
+                            if !cur.skip {
+                                push(&mut segs, i, i + 2, '\u{a0}', cur.uc);
+                            }
+                            group_start = false;
+                            i += 2;
+                        }
+                        b'\r' | b'\n' => {
+                            // backslash + newline is a paragraph mark
+                            if !cur.skip {
+                                barrier(&mut segs);
+                            }
+                            i += 2;
+                        }
+                        _ => i += 2, // \- \_ \| \: ... are transparent
+                    }
+                }
+            }
+            _ => {
+                if !cur.skip {
+                    if b < 0x80 {
+                        push(&mut segs, i, i + 1, b as char, cur.uc);
+                    } else {
+                        barrier(&mut segs); // raw 8-bit byte: encoding unknown
+                    }
+                }
+                group_start = false;
+                i += 1;
+            }
+        }
+    }
+    segs
+}
+
+/// True when `out` ends with a control word that is not terminated yet (`\b`, `\fs24`):
+/// text appended directly would be glued to it.
+fn ends_with_open_ctrl(out: &[u8]) -> bool {
+    let mut j = out.len();
+    while j > 0 && out[j - 1].is_ascii_digit() {
+        j -= 1;
+    }
+    if j > 0 && out[j - 1] == b'-' {
+        j -= 1;
+    }
+    let letters_end = j;
+    while j > 0 && out[j - 1].is_ascii_alphabetic() {
+        j -= 1;
+    }
+    if j == letters_end || j == 0 {
+        return false;
+    }
+    let mut k = j;
+    let mut backslashes = 0;
+    while k > 0 && out[k - 1] == b'\\' {
+        backslashes += 1;
+        k -= 1;
+    }
+    backslashes % 2 == 1
+}
+
+/// Writes `text` as RTF: ASCII as is, everything else as \uN with `uc` fallback characters.
+fn push_rtf_text(out: &mut Vec<u8>, text: &str, uc: usize) {
+    for ch in text.chars() {
+        match ch {
+            '\\' => out.extend_from_slice(b"\\\\"),
+            '{' => out.extend_from_slice(b"\\{"),
+            '}' => out.extend_from_slice(b"\\}"),
+            '\n' => out.extend_from_slice(b"\\line "),
+            '\r' => {}
+            '\t' => out.extend_from_slice(b"\\tab "),
+            c if (c as u32) >= 0x20 && (c as u32) < 0x7F => out.push(c as u8),
+            c => {
+                let mut buf = [0u16; 2];
+                for &u in c.encode_utf16(&mut buf).iter() {
+                    let v = u as i32;
+                    let v = if v > 32767 { v - 65536 } else { v };
+                    out.extend_from_slice(format!("\\u{}", v).as_bytes());
+                    if uc == 0 {
+                        out.push(b' ');
+                    } else {
+                        for _ in 0..uc {
+                            out.push(b'?');
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn rtf_replace(data: &[u8], rules: &[Compiled]) -> (Vec<u8>, usize) {
+    let segs = rtf_segments(data);
+    let mut edits: Vec<(usize, usize, String, usize)> = Vec::new();
+    let mut total = 0usize;
+    for seg in &segs {
+        if seg.is_empty() {
+            continue;
+        }
+        let mut runs: Vec<String> = seg.iter().map(|a| a.ch.to_string()).collect();
+        let n = apply_to_runs_nl(&mut runs, rules, "\n");
+        if n == 0 {
+            continue;
+        }
+        total += n;
+        for (a, r) in seg.iter().zip(runs.iter()) {
+            if *r != a.ch.to_string() {
+                edits.push((a.start, a.end, r.clone(), a.uc));
+            }
+        }
+    }
+    if total == 0 {
+        return (data.to_vec(), 0);
+    }
+    let mut out = Vec::with_capacity(data.len() + 64);
+    let mut pos = 0usize;
+    for (s, e, text, uc) in &edits {
+        out.extend_from_slice(&data[pos..*s]);
+        if !text.is_empty() {
+            if ends_with_open_ctrl(&out) {
+                out.push(b' ');
+            }
+            push_rtf_text(&mut out, text, *uc);
+        }
+        pos = *e;
+    }
+    out.extend_from_slice(&data[pos..]);
+    (out, total)
+}
+
+fn process_rtf(path: &Path, meta: &fs::Metadata, rules: &[Compiled], o: &Request) -> Res<Outcome> {
+    let data = fs::read(path)?;
+    if !data.starts_with(b"{\\rtf") {
+        return Ok(Outcome::Skipped("skip.not_rtf".into()));
+    }
+    let (out, n) = rtf_replace(&data, rules);
+    if n == 0 {
+        return Ok(Outcome::Unchanged);
+    }
+    if !o.dry && out != data {
+        write_atomic(path, &out, meta, o.backup)?;
     }
     Ok(Outcome::Changed(n))
 }
@@ -999,27 +1270,23 @@ fn parse_masks(mask: &str) -> Vec<Vec<char>> {
     }
 }
 
-fn process_file(path: &Path, rules: &[Compiled], o: &Request, lo: Option<&Path>) -> Result<Outcome, String> {
+fn process_file(path: &Path, rules: &[Compiled], o: &Request) -> Result<Outcome, String> {
     let meta = fs::metadata(path).map_err(|e| e.to_string())?;
     if o.max_size_mb > 0 && meta.len() > o.max_size_mb.saturating_mul(1024 * 1024) {
         return Ok(Outcome::Skipped(format!("skip.too_big\u{1f}{}", o.max_size_mb)));
     }
     if let Some(fmt) = legacy_fmt(path) {
-        if o.legacy == "modern" || o.legacy == "inplace" {
-            return match lo {
-                Some(soffice) => process_legacy(path, &meta, rules, o, soffice, &fmt).map_err(|e| e.to_string()),
-                None => Ok(Outcome::Skipped("skip.no_office".into())),
-            };
+        if o.convert_legacy {
+            return process_legacy(path, rules, o, &fmt).map_err(|e| e.to_string());
         }
-        // .rtf stays readable as plain text (Latin only); .doc/.xls/.ppt cannot be edited directly
-        if fmt.back_ext != "rtf" {
-            return Ok(Outcome::Skipped("skip.legacy".into()));
-        }
+        return Ok(Outcome::Skipped("skip.legacy".into()));
     }
     let r = if let Some(kind) = doc_kind(path) {
         process_zip_doc(kind, path, &meta, rules, o)
     } else if is_pdf(path) {
         process_pdf(path, &meta, rules, o)
+    } else if is_rtf(path) {
+        process_rtf(path, &meta, rules, o)
     } else {
         process_text(path, &meta, rules, o)
     };
@@ -1062,29 +1329,40 @@ where
     let skipped = AtomicUsize::new(0);
     let errors = AtomicUsize::new(0);
 
-    let needs_lo = (o.legacy == "modern" || o.legacy == "inplace")
-        && files.iter().any(|p| legacy_fmt(p).is_some());
-    LO_DEAD.store(false, Ordering::Relaxed);
-    let lo: Option<PathBuf> = if needs_lo { find_soffice(&o.soffice_path) } else { None };
+    // big stacks: the legacy-format parsers recurse deeply on some files
+    let pool = rayon::ThreadPoolBuilder::new()
+        .stack_size(16 * 1024 * 1024)
+        .build()
+        .map_err(|e| e.to_string())?;
 
-    files.par_iter().for_each(|p| {
-        let path = p.to_string_lossy().to_string();
-        match process_file(p, &rules, o, lo.as_deref()) {
-            Ok(Outcome::Unchanged) => {}
-            Ok(Outcome::Changed(n)) => {
-                changed.fetch_add(1, Ordering::Relaxed);
-                replaced.fetch_add(n, Ordering::Relaxed);
-                emit(FileEvent { path, status: "ok".into(), count: n, info: String::new() });
+    pool.install(|| {
+        files.par_iter().for_each(|p| {
+            let path = p.to_string_lossy().to_string();
+            // a parser bug must not take the whole application down
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process_file(p, &rules, o)))
+                .unwrap_or_else(|_| Err("err.internal".to_string()));
+            match res {
+                Ok(Outcome::Unchanged) => {}
+                Ok(Outcome::Changed(n)) => {
+                    changed.fetch_add(1, Ordering::Relaxed);
+                    replaced.fetch_add(n, Ordering::Relaxed);
+                    emit(FileEvent { path, status: "ok".into(), count: n, info: String::new() });
+                }
+                Ok(Outcome::Converted(n, name)) => {
+                    changed.fetch_add(1, Ordering::Relaxed);
+                    replaced.fetch_add(n, Ordering::Relaxed);
+                    emit(FileEvent { path, status: "ok".into(), count: n, info: name });
+                }
+                Ok(Outcome::Skipped(why)) => {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    emit(FileEvent { path, status: "skipped".into(), count: 0, info: why });
+                }
+                Err(e) => {
+                    errors.fetch_add(1, Ordering::Relaxed);
+                    emit(FileEvent { path, status: "error".into(), count: 0, info: e });
+                }
             }
-            Ok(Outcome::Skipped(why)) => {
-                skipped.fetch_add(1, Ordering::Relaxed);
-                emit(FileEvent { path, status: "skipped".into(), count: 0, info: why });
-            }
-            Err(e) => {
-                errors.fetch_add(1, Ordering::Relaxed);
-                emit(FileEvent { path, status: "error".into(), count: 0, info: e });
-            }
-        }
+        });
     });
 
     Ok(Stats {
@@ -1255,21 +1533,79 @@ mod tests {
 
     #[test]
     fn legacy_formats_detected() {
-        let f = legacy_fmt(Path::new("dir/Report.DOC")).unwrap();
-        assert_eq!((f.modern_ext, f.back_ext), ("docx", "doc"));
+        assert_eq!(legacy_fmt(Path::new("dir/Report.DOC")).unwrap().modern_ext, "docx");
         assert_eq!(legacy_fmt(Path::new("a.xls")).unwrap().modern_ext, "xlsx");
         assert_eq!(legacy_fmt(Path::new("a.ppt")).unwrap().modern_ext, "pptx");
         assert!(legacy_fmt(Path::new("a.docx")).is_none());
+        assert!(legacy_fmt(Path::new("a.rtf")).is_none());
         assert!(legacy_fmt(Path::new("noext")).is_none());
     }
 
+    fn rtf_text(data: &[u8]) -> String {
+        rtf_segments(data).iter().flat_map(|s| s.iter().map(|a| a.ch)).collect()
+    }
+
+    fn run_rtf(src: &[u8], find: &str, repl: &str) -> (String, usize) {
+        let c = compile(&rule(find, repl), &req()).unwrap();
+        let (out, n) = rtf_replace(src, &c);
+        (String::from_utf8_lossy(&out).to_string(), n)
+    }
+
     #[test]
-    fn file_url_is_percent_encoded() {
-        assert_eq!(
-            file_url_path(Path::new("/tmp/a b/Павел")),
-            "/tmp/a%20b/%D0%9F%D0%B0%D0%B2%D0%B5%D0%BB"
-        );
-        assert_eq!(file_url_path(Path::new("C:\\Users\\x")), "/C:/Users/x");
+    fn rtf_plain_replacement() {
+        let (out, n) = run_rtf(br"{\rtf1\ansi Hello World\par}", "World", "There");
+        assert_eq!(n, 1);
+        assert_eq!(out, r"{\rtf1\ansi Hello There\par}");
+    }
+
+    #[test]
+    fn rtf_match_across_formatting() {
+        let (out, n) = run_rtf(br"{\rtf1\ansi Hello {\b Wor}ld\par}", "World", "X");
+        assert_eq!(n, 1);
+        assert_eq!(out, r"{\rtf1\ansi Hello {\b X}\par}");
+    }
+
+    #[test]
+    fn rtf_cyrillic_cp1251() {
+        let src = br"{\rtf1\ansi\ansicpg1251\deff0{\fonttbl{\f0\fcharset204 Arial;}}\f0 \'cf\'f0\'e8\'e2\'e5\'f2 \'ec\'e8\'f0\par}";
+        assert_eq!(rtf_text(src), "Привет мир");
+        let (out, n) = run_rtf(src, "Привет", "Здравствуй");
+        assert_eq!(n, 1);
+        assert_eq!(rtf_text(out.as_bytes()), "Здравствуй мир");
+        assert!(out.contains(r"\u1047?"));
+    }
+
+    #[test]
+    fn rtf_control_word_gets_delimiter_before_inserted_text() {
+        let (out, n) = run_rtf(br"{\rtf1\ansi \b\'41\b0 rest}", "A", "Zed");
+        assert_eq!(n, 1);
+        assert_eq!(out, r"{\rtf1\ansi \b Zed\b0 rest}");
+    }
+
+    #[test]
+    fn rtf_unicode_escape_and_fallback() {
+        let (out, n) = run_rtf(br"{\rtf1\ansi\uc1 caf\u233? x}", "caf\u{e9}", "tea");
+        assert_eq!(n, 1);
+        assert_eq!(out, r"{\rtf1\ansi\uc1 tea x}");
+    }
+
+    #[test]
+    fn rtf_font_table_is_not_touched() {
+        let (out, n) = run_rtf(br"{\rtf1{\fonttbl{\f0 Arial;}}\f0 Arial text}", "Arial", "X");
+        assert_eq!(n, 1);
+        assert_eq!(out, r"{\rtf1{\fonttbl{\f0 Arial;}}\f0 X text}");
+    }
+
+    #[test]
+    fn rtf_match_does_not_span_paragraphs() {
+        let (_, n) = run_rtf(br"{\rtf1\ansi one\par two}", "onetwo", "X");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn rtf_special_characters_are_escaped() {
+        let (out, _) = run_rtf(br"{\rtf1\ansi a}", "a", r"{x}\y");
+        assert_eq!(out, r"{\rtf1\ansi \{x\}\\y}");
     }
 
     #[test]

@@ -70,15 +70,10 @@
   "dlg.no_folder": "Please specify a folder (you can drop it into the window)",
   "dlg.rules_dialog": "Rules file (find<TAB>replace)",
   "drop.hint": "Drop to select the folder",
-  "legacy.label": "Legacy formats (.doc .xls .ppt .rtf) via LibreOffice",
-  "legacy.skip": "Skip",
-  "legacy.modern": "Convert and save as .docx / .xlsx / .pptx",
-  "legacy.inplace": "Edit and save in the same format",
-  "legacy.hint": "Requires LibreOffice. Slower: each file is converted (about 2 s). \"Convert\" leaves the original untouched; \"same format\" overwrites it (enable .bak backups).",
-  "legacy.path_ph": "LibreOffice path (auto-detect if empty)",
-  "skip.legacy": "legacy format — enable LibreOffice conversion",
-  "skip.no_office": "LibreOffice not found (install it or set its path)",
-  "err.lo_failed": "LibreOffice conversion failed: {0}",
-  "err.lo_timeout": "LibreOffice conversion timed out",
-  "err.dest_exists": "{0} already exists"
+  "skip.legacy": "old binary format — enable conversion in the sidebar",
+  "opt.convertLegacy": "Convert old .doc / .xls / .ppt (saved as .docx / .xlsx / .pptx next to the original)",
+  "skip.dest_exists": "{0} already exists — edit that file instead",
+  "skip.not_rtf": "not a valid RTF file",
+  "err.convert_failed": "Conversion failed: {0}",
+  "err.internal": "Internal error while processing this file"
 }

@@ -20,7 +20,7 @@ the interface is built with [Tauri](https://tauri.app).
 - Auto-detects encodings (UTF-8, UTF-16, cp1251) and keeps line-ending style (LF / CRLF)
 - Drag-and-drop a folder or file into the window
 - Dark / light / system theme, remembered settings
-- Legacy `.doc` / `.xls` / `.ppt` / `.rtf` through LibreOffice (optional)
+- Legacy `.doc` / `.xls` / `.ppt` converted to `.docx` / `.xlsx` / `.pptx`, and `.rtf` edited in place — no LibreOffice needed
 - **Interface languages**: English and Russian, more can be added without rebuilding
 
 ## Supported formats
@@ -32,27 +32,34 @@ the interface is built with [Tauri](https://tauri.app).
 | Excel | xlsx, xlsm, xltx, xltm | string cell values (shared and inline strings) |
 | PowerPoint | pptx, pptm, potx, potm, ppsx, ppsm | slide and notes text |
 | LibreOffice / OpenOffice | odt, ods, odp, odg, ott, ots, otp, otg | `content.xml`, `styles.xml` (incl. headers/footers) |
-| Legacy Office | doc, xls, ppt, rtf | via [LibreOffice](https://www.libreoffice.org) (must be installed) — see below |
+| Legacy Office | doc, xls, ppt | converted by the built-in converter to docx / xlsx / pptx (the original is untouched) — see below |
+| RTF | rtf | edited in place, formatting kept (Cyrillic and other code pages supported) |
 | PDF *(experimental)* | pdf | Latin text in simple fonts only — see below |
 
 In office formats the formatting is preserved even if a phrase is split into runs with different styles.
 A match must lie within one paragraph (in spreadsheets: within one cell).
 Not touched: formulas, sheet names, comments, charts, document properties.
 
-### Legacy formats (.doc, .xls, .ppt, .rtf)
+### Legacy formats (.doc, .xls, .ppt)
 
-Binary Word 97 / Excel 97 / PowerPoint 97 files cannot be edited safely in place, so the app uses a
-locally installed **LibreOffice** (detected automatically, or set its path in the sidebar):
+Binary Word 97 / Excel 97 / PowerPoint 97 files cannot be edited safely in place, so the app converts them
+**with its own built-in converter** (no Office or LibreOffice needed):
 
-1. the file is converted to `.docx` / `.xlsx` / `.pptx` in a temporary folder,
-2. the replacement is done there (formatting and fonts are preserved),
-3. the result is saved according to the chosen mode:
-   - **Convert and save as .docx/.xlsx/.pptx** — a new file is created next to the original, the original is untouched;
-   - **Edit and save in the same format** — the result is converted back and overwrites the original
-     (enable `.bak` backups; LibreOffice re-encodes the file, so rare layout differences are possible).
+1. the file is converted to `.docx` / `.xlsx` / `.pptx` in a temporary folder (fonts, sizes, colours, tables, headers and images are carried over),
+2. the replacement is done there,
+3. the result is saved **next to the original** as a new file; the original is never modified.
+   If the target file already exists, the legacy file is skipped (edit the existing `.docx` instead).
 
-It is off by default and slower (about 2 seconds per file, files are converted one at a time).
-`.rtf` also works this way, which makes Cyrillic text in RTF searchable.
+Only files that actually contain a match produce a new file. The option can be switched off in the sidebar.
+Limitations: the converter is young, so check the result on complex documents; spreadsheet formulas become values;
+`.doc` / `.xls` / `.ppt` cannot be saved back in the old format.
+Conversion uses the [`office_oxide`](https://crates.io/crates/office_oxide) crate (MIT / Apache-2.0).
+
+### RTF
+
+`.rtf` is edited **in place** by a built-in parser: only the text is replaced, all formatting control words stay.
+Text split by bold / italic / colour changes is still found. A match cannot span paragraphs, table cells or line breaks.
+Code pages (`\ansicpg`, per-font charsets: 1250–1258, 874, 866, KOI8) and `\uN` escapes are handled; replacement text is written as `\uN` escapes.
 
 ### PDF limitations
 

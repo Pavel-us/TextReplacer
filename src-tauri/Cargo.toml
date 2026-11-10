@@ -1,6 +1,6 @@
 [package]
 name = "text-replacer"
-version = "1.1.0"
+version = "1.2.0"
 description = "Find and replace text in files: plain text, Word, Excel, PowerPoint, LibreOffice, PDF"
 license = "MIT"
 repository = "https://github.com/Pavel-us/TextReplacer"
@@ -23,6 +23,7 @@ rayon = "1"
 encoding_rs = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 lopdf = { version = "0.34", optional = true }
+office_oxide = "=0.1.2"
 
 [features]
 default = ["pdf"]
@@ -32,5 +33,4 @@ pdf = ["dep:lopdf"]
 opt-level = "s"
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true

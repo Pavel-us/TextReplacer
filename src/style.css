@@ -111,5 +111,3 @@ tbody tr:hover { background: var(--hover); }
 .drop { position: fixed; inset: 0; z-index: 10; background: rgba(37,99,235,.18); backdrop-filter: blur(2px); display: grid; place-items: center; pointer-events: none; }
 .drop > div { padding: 28px 44px; border-radius: 16px; border: 2px dashed var(--accent); background: var(--panel); font-size: 18px; font-weight: 600; box-shadow: var(--shadow); }
 
-.hint { margin: 4px 0 0; line-height: 1.35; }
-#sofficePath { margin-top: 6px; }

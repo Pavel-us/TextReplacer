@@ -12,6 +12,7 @@
     ["regex", "opt.regex", false],
     ["backup", "opt.backup", true],
     ["binary", "opt.binary", false],
+    ["convertLegacy", "opt.convertLegacy", true],
   ];
 
   // ───────────────────────── i18n ─────────────────────────
@@ -107,8 +108,7 @@
     try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; }
   }
   function saveSettings() {
-    const s = { folder: $("folder").value, mask: $("mask").value, maxsize: $("maxsize").value, theme: $("theme").value, lang,
-      legacy: $("legacy").value, sofficePath: $("sofficePath").value };
+    const s = { folder: $("folder").value, mask: $("mask").value, maxsize: $("maxsize").value, theme: $("theme").value, lang };
     for (const [k] of OPTS) s["o_" + k] = $("opt-" + k).checked;
     try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* ignore */ }
   }
@@ -130,8 +130,6 @@
   if (st.maxsize !== undefined) $("maxsize").value = st.maxsize;
   for (const [k] of OPTS) if (("o_" + k) in st) $("opt-" + k).checked = st["o_" + k];
   $("theme").value = st.theme || "system";
-  $("legacy").value = st.legacy || "skip";
-  if (st.sofficePath) $("sofficePath").value = st.sofficePath;
 
   function applyTheme() {
     const v = $("theme").value;
@@ -179,7 +177,7 @@
   }
 
   function statusText(status, info, dry) {
-    if (status === "ok") return t(dry ? "row.found" : "row.replaced");
+    if (status === "ok") return t(dry ? "row.found" : "row.replaced") + (!dry && info ? " → " + info : "");
     if (status === "skipped") return t("row.skipped", tb(info));
     return t("row.error", tb(info));
   }
@@ -340,7 +338,7 @@
       ignoreWs: $("opt-ignoreWs").checked, regex: $("opt-regex").checked,
       backup: $("opt-backup").checked, binary: $("opt-binary").checked,
       dry, maxSizeMb: Math.max(0, Math.floor(Number($("maxsize").value) || 0)),
-      legacy: $("legacy").value, sofficePath: $("sofficePath").value.trim(),
+      convertLegacy: $("opt-convertLegacy").checked,
     };
 
     lastDry = dry; lastFolder = folder; lastStats = null; pending = [];
