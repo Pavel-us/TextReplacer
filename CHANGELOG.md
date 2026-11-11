@@ -2,6 +2,12 @@
 
 All notable changes are documented here. / Все заметные изменения описаны здесь.
 
+## [1.4.0] — 2026-11-11
+
+### Changed / Изменено
+- Multi-line find now works across paragraph boundaries in .docx/.docm/.dotx/.dotm, .pptx/.pptm/.potx/.potm/.ppsx/.ppsm, .odt/.odp/.ods and .rtf: put several lines with line breaks into `Find`. Table cells remain barriers — a match cannot cross a cell boundary. Single-line finds still match within one paragraph/cell only.
+- Многострочный поиск теперь работает через границы абзацев в .docx/.docm/.dotx/.dotm, .pptx/.pptm/.potx/.potm/.ppsx/.ppsm, .odt/.odp/.ods и .rtf — укажите в «Найти» несколько строк с переносами. Ячейки таблиц остаются барьером: совпадение не выходит за границу ячейки. Однострочные поиски по-прежнему работают внутри одного абзаца/ячейки.
+
 ## [1.3.0] — unreleased / не выпущено
 
 <!-- lang:en -->
@@ -12,6 +18,7 @@ All notable changes are documented here. / Все заметные измене�
 
 ### Changed
 - In regular-expression mode, replacement text with line breaks now follows the file's line-ending style (LF / CRLF).
+- Multi-line find now works across paragraph boundaries in .docx/.docm/.dotx/.dotm, .pptx/.pptm/.potx/.potm/.ppsx/.ppsm, .odt/.odp/.ods and .rtf: put several lines with line breaks into `Find`. Table cells remain barriers — a match cannot cross a cell boundary. Single-line finds still match within one paragraph/cell only.
 
 ### Removed
 - Automatic conversion of old .doc / .xls / .ppt files: it lost fonts and tables and could alter the text. These files are now skipped with a hint — save them as .docx / .xlsx / .pptx in Word or LibreOffice first.
@@ -24,6 +31,7 @@ All notable changes are documented here. / Все заметные измене�
 
 ### Изменено
 - В режиме регулярных выражений переводы строк в тексте замены теперь соответствуют стилю файла (LF / CRLF).
+- Многострочный поиск теперь работает через границы абзацев в .docx/.docm/.dotx/.dotm, .pptx/.pptm/.potx/.potm/.ppsx/.ppsm, .odt/.odp/.ods и .rtf — укажите в «Найти» несколько строк с переносами. Ячейки таблиц остаются барьером: совпадение не выходит за границу ячейки. Однострочные поиски по-прежнему работают внутри одного абзаца/ячейки.
 
 ### Удалено
 - Автоматическая конвертация старых файлов .doc / .xls / .ppt: она теряла шрифты и таблицы и могла искажать текст. Такие файлы теперь пропускаются с подсказкой — сначала сохраните их как .docx / .xlsx / .pptx в Word или LibreOffice.

@@ -12,8 +12,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
+use crate::flow::{replace as flow_replace, Rule as FlowRule, Fmt, plan_match};
 use walkdir::WalkDir;
 use zip::{write::SimpleFileOptions, CompressionMethod};
 
@@ -68,6 +69,8 @@ pub struct Compiled {
     re: Regex,
     repl: String,
     is_regex: bool,
+    /// the pattern may match a paragraph break, so the flow is needed
+    spans: bool,
 }
 
 impl Compiled {
@@ -122,6 +125,9 @@ pub fn compile(rules: &[Rule], o: &Request) -> Result<Vec<Compiled>, String> {
             re,
             repl: if o.regex { r.repl.clone() } else { r.repl.replace("\r\n", "\n") },
             is_regex: o.regex,
+            // a plain pattern needs the flow only when it contains a line break;
+            // `\s+` of the "ignore whitespace" mode and any regex may cross one as well
+            spans: o.regex || o.ignore_ws || r.find.contains('\n'),
         });
     }
     Ok(out)
@@ -304,7 +310,7 @@ const O_P: &str = r"(?s)<text:p(?:\s(?:[^>/]|/[^>])*)?>.*?</text:p>";
 const O_H: &str = r"(?s)<text:h(?:\s(?:[^>/]|/[^>])*)?>.*?</text:h>";
 const TAG: &str = r"<[^>]*>";
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Word,
     Excel,
@@ -330,11 +336,11 @@ fn is_pdf(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-fn xml_unescape(s: &str) -> String {
+pub(crate) fn xml_unescape(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
     }
@@ -524,19 +530,45 @@ fn is_slide_part(name: &str) -> bool {
 }
 
 fn process_part(kind: Kind, name: &str, xml: &str, rules: &[Compiled]) -> (String, usize) {
-    match kind {
-        Kind::Word if is_word_part(name) => replace_units(xml, re!(W_P), re!(W_T), true, rules),
-        Kind::Slides if is_slide_part(name) => replace_units(xml, re!(A_P), re!(A_T), false, rules),
-        Kind::Excel if name == "xl/sharedStrings.xml" => replace_units(xml, re!(X_SI), re!(X_T), true, rules),
-        Kind::Excel if name.starts_with("xl/worksheets/") && name.ends_with(".xml") => {
-            replace_units(xml, re!(X_IS), re!(X_T), true, rules)
+    // Excel keeps its per-cell path: a match never crosses cells.
+    if kind == Kind::Excel {
+        if name == "xl/sharedStrings.xml" {
+            return replace_units(xml, re!(X_SI), re!(X_T), true, rules);
         }
-        Kind::Odf if name == "content.xml" || name == "styles.xml" => {
-            let (x, n1) = odf_units(xml, re!(O_P), rules);
-            let (x, n2) = odf_units(&x, re!(O_H), rules);
-            (x, n1 + n2)
+        if name.starts_with("xl/worksheets/") && name.ends_with(".xml") {
+            return replace_units(xml, re!(X_IS), re!(X_T), true, rules);
         }
-        _ => (xml.to_string(), 0),
+        return (xml.to_string(), 0);
+    }
+    let fmt = match kind {
+        Kind::Word => Fmt::Word,
+        Kind::Slides => Fmt::Slides,
+        Kind::Odf => Fmt::Odf,
+        Kind::Excel => unreachable!(),
+    };
+    let ok_name = match kind {
+        Kind::Word => is_word_part(name),
+        Kind::Slides => is_slide_part(name),
+        Kind::Odf => name == "content.xml" || name == "styles.xml",
+        Kind::Excel => false,
+    };
+    if !ok_name {
+        return (xml.to_string(), 0);
+    }
+    if rules.iter().any(|c| c.spans) {
+        let rules: Vec<FlowRule> = rules.iter().map(|c| FlowRule { re: &c.re, repl: &c.repl, is_regex: c.is_regex }).collect();
+        flow_replace(xml, fmt, &rules)
+    } else {
+        match kind {
+            Kind::Word => replace_units(xml, re!(W_P), re!(W_T), true, rules),
+            Kind::Slides => replace_units(xml, re!(A_P), re!(A_T), false, rules),
+            Kind::Odf => {
+                let (x, n1) = odf_units(xml, re!(O_P), rules);
+                let (x, n2) = odf_units(&x, re!(O_H), rules);
+                (x, n1 + n2)
+            }
+            Kind::Excel => unreachable!(),
+        }
     }
 }
 
@@ -954,8 +986,12 @@ fn rtf_segments(data: &[u8]) -> Vec<Vec<RtfAtom>> {
                                     next = e;
                                 }
                             }
-                            "par" | "line" | "cell" | "row" | "nestcell" | "nestrow" | "sect"
-                            | "page" | "column" | "lbr" => {
+                            "par" | "line" | "lbr" => {
+                                if !cur.skip {
+                                    push(&mut segs, i, next, '\n', cur.uc);
+                                }
+                            }
+                            "cell" | "row" | "nestcell" | "nestrow" | "sect" | "page" | "column" => {
                                 if !cur.skip {
                                     barrier(&mut segs);
                                 }
@@ -1021,13 +1057,13 @@ fn rtf_segments(data: &[u8]) -> Vec<Vec<RtfAtom>> {
                             group_start = false;
                             i += 2;
                         }
-                        b'\r' | b'\n' => {
-                            // backslash + newline is a paragraph mark
-                            if !cur.skip {
-                                barrier(&mut segs);
+                            b'\r' | b'\n' => {
+                                // backslash + newline is a paragraph mark
+                                if !cur.skip {
+                                    push(&mut segs, i, i + 2, '\n', cur.uc);
+                                }
+                                i += 2;
                             }
-                            i += 2;
-                        }
                         _ => i += 2, // \- \_ \| \: ... are transparent
                     }
                 }
@@ -1105,42 +1141,192 @@ fn push_rtf_text(out: &mut Vec<u8>, text: &str, uc: usize) {
 }
 
 fn rtf_replace(data: &[u8], rules: &[Compiled]) -> (Vec<u8>, usize) {
-    let segs = rtf_segments(data);
-    let mut edits: Vec<(usize, usize, String, usize)> = Vec::new();
+    let mut cur = data.to_vec();
     let mut total = 0usize;
-    for seg in &segs {
-        if seg.is_empty() {
-            continue;
+    for c in rules {
+        let segs = rtf_segments(&cur);
+        let mut edits: Vec<(usize, usize, Vec<u8>)> = Vec::new();
+        let mut n = 0usize;
+        for seg in &segs {
+            if seg.is_empty() {
+                continue;
+            }
+            let (e, cnt) = rtf_segment_edits(&cur, seg, c);
+            edits.extend(e);
+            n += cnt;
         }
-        let mut runs: Vec<String> = seg.iter().map(|a| a.ch.to_string()).collect();
-        let n = apply_to_runs_nl(&mut runs, rules, "\n");
         if n == 0 {
             continue;
         }
-        total += n;
-        for (a, r) in seg.iter().zip(runs.iter()) {
-            if *r != a.ch.to_string() {
-                edits.push((a.start, a.end, r.clone(), a.uc));
+        edits.sort_by_key(|e| (e.0, e.1));
+        let mut out = Vec::with_capacity(cur.len());
+        let mut pos = 0usize;
+        for (s, e, v) in &edits {
+            if *s < pos {
+                continue;
             }
-        }
-    }
-    if total == 0 {
-        return (data.to_vec(), 0);
-    }
-    let mut out = Vec::with_capacity(data.len() + 64);
-    let mut pos = 0usize;
-    for (s, e, text, uc) in &edits {
-        out.extend_from_slice(&data[pos..*s]);
-        if !text.is_empty() {
-            if ends_with_open_ctrl(&out) {
+            out.extend_from_slice(&cur[pos..*s]);
+            if !v.is_empty() && ends_with_open_ctrl(&out) {
                 out.push(b' ');
             }
-            push_rtf_text(&mut out, text, *uc);
+            out.extend_from_slice(v);
+            pos = *e;
         }
-        pos = *e;
+        out.extend_from_slice(&cur[pos..]);
+        cur = out;
+        total += n;
     }
-    out.extend_from_slice(&data[pos..]);
-    (out, total)
+    (cur, total)
+}
+
+/// Write-back of one RTF segment for one rule. A `\par`/`\line` is now a `\n` atom, so a
+/// match may span paragraphs; edits are planned line by line like the OOXML flow.
+fn rtf_segment_edits(data: &[u8], seg: &[RtfAtom], r: &Compiled) -> (Vec<(usize, usize, Vec<u8>)>, usize) {
+    let mut text = String::with_capacity(seg.len());
+    let mut starts: Vec<usize> = Vec::with_capacity(seg.len());
+    for a in seg {
+        starts.push(text.len());
+        text.push(a.ch);
+    }
+    // lines: (first atom, atom past last text char, nl atom index, byte start in text, byte length)
+    let mut lines: Vec<(usize, usize, Option<usize>, usize, usize)> = Vec::new();
+    let mut a = 0usize;
+    let mut gs = 0usize;
+    for i in 0..seg.len() {
+        if seg[i].ch != '\n' {
+            continue;
+        }
+        lines.push((a, i, Some(i), gs, starts[i] - gs));
+        a = i + 1;
+        gs = if i + 1 < seg.len() { starts[i + 1] } else { text.len() };
+    }
+    if a < seg.len() {
+        lines.push((a, seg.len(), None, gs, text.len() - gs));
+    }
+    let caps: Vec<Captures> = r.re.captures_iter(&text).filter(|m| !m[0].is_empty()).collect();
+    if caps.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let mut ops: BTreeMap<usize, Vec<(usize, usize, String)>> = BTreeMap::new();
+    let mut dels: Vec<usize> = Vec::new();
+    let mut ins: Vec<(usize, Vec<String>)> = Vec::new();
+    for m in &caps {
+        let w = m.get(0).unwrap();
+        let (la, oa) = rtf_locate(&lines, w.start());
+        let (lb, ob) = rtf_locate(&lines, w.end());
+        let lens: Vec<usize> = (la..=lb).map(|i| lines[i].4).collect();
+        let l = lines[lb];
+        let suffix = text[l.3 + ob..l.3 + l.4].to_string();
+        let mut p = plan_match(la, oa, lb, ob, &lens, &r.expand(m, "\n"), &suffix);
+        for (k, v) in p.ops {
+            ops.entry(k).or_default().extend(v);
+        }
+        dels.append(&mut p.dels);
+        ins.append(&mut p.ins);
+    }
+    // a line that another match also writes into is emptied instead of being deleted
+    let dl: HashSet<usize> = dels.into_iter().collect();
+    let mut removed: Vec<usize> = Vec::new();
+    for d in &dl {
+        if let Some(list) = ops.get_mut(d) {
+            let joined: String = list.iter().map(|(_, _, s)| s.as_str()).collect();
+            *list = vec![(0, lines[*d].4, joined)];
+        } else {
+            removed.push(*d);
+        }
+    }
+    let mut edits: Vec<(usize, usize, Vec<u8>)> = Vec::new();
+    for d in removed {
+        let l = lines[d];
+        let nlk = match d.checked_sub(1).and_then(|p| lines[p].2) {
+            Some(k) => k,
+            None => continue,
+        };
+        let e = if l.1 > l.0 { seg[l.1 - 1].end } else { seg[nlk].end };
+        let s = seg[nlk].start;
+        if braces_balanced(&data[s..e]) {
+            edits.push((s, e, Vec::new()));
+        } else if l.1 > l.0 {
+            edits.push((seg[l.0].start, seg[l.1 - 1].end, Vec::new()));
+        }
+    }
+    for (li, list) in &ops {
+        let l = lines[*li];
+        let uc = seg.get(l.0).map(|a| a.uc).unwrap_or(1);
+        for (ra, rb, txt) in list {
+            if txt.is_empty() && ra == rb {
+                continue;
+            }
+            let ka = l.0 + text[l.3..l.3 + ra].chars().count();
+            let kb = l.0 + text[l.3..l.3 + rb].chars().count();
+            if ka >= seg.len() {
+                let p = seg[seg.len() - 1].end;
+                let mut v = Vec::new();
+                push_rtf_text(&mut v, txt, uc);
+                edits.push((p, p, v));
+                continue;
+            }
+            let mut v = Vec::new();
+            push_rtf_text(&mut v, txt, uc);
+            edits.push((seg[ka].start, seg[ka].end, v));
+            for k in ka + 1..kb.min(seg.len()) {
+                edits.push((seg[k].start, seg[k].end, Vec::new()));
+            }
+        }
+    }
+    for (anchor, extras) in ins {
+        let l = lines[anchor];
+        let uc = seg.get(l.0).map(|a| a.uc).unwrap_or(1);
+        let mut v = Vec::new();
+        let pos = match l.2 {
+            Some(k) => {
+                for t in extras {
+                    push_rtf_text(&mut v, &t, uc);
+                    v.extend_from_slice(b"\\par ");
+                }
+                seg[k].end
+            }
+            None => {
+                for t in extras {
+                    v.extend_from_slice(b"\\par ");
+                    push_rtf_text(&mut v, &t, uc);
+                }
+                if l.1 > l.0 { seg[l.1 - 1].end } else { seg[l.0].start }
+            }
+        };
+        edits.push((pos, pos, v));
+    }
+    (edits, caps.len())
+}
+
+fn rtf_locate(lines: &[(usize, usize, Option<usize>, usize, usize)], p: usize) -> (usize, usize) {
+    let i = match lines.binary_search_by_key(&p, |l| l.3) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    };
+    (i, (p - lines[i].3).min(lines[i].4))
+}
+
+/// Deleted bytes must keep braces balanced, otherwise the RTF group structure breaks.
+fn braces_balanced(b: &[u8]) -> bool {
+    let mut open = 0i32;
+    let mut close = 0i32;
+    let mut i = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            b'{' => {
+                open += 1;
+                i += 1;
+            }
+            b'}' => {
+                close += 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    open == close
 }
 
 fn process_rtf(path: &Path, meta: &fs::Metadata, rules: &[Compiled], o: &Request) -> Res<Outcome> {
@@ -1520,10 +1706,10 @@ mod tests {
     #[test]
     fn rtf_cyrillic_cp1251() {
         let src = br"{\rtf1\ansi\ansicpg1251\deff0{\fonttbl{\f0\fcharset204 Arial;}}\f0 \'cf\'f0\'e8\'e2\'e5\'f2 \'ec\'e8\'f0\par}";
-        assert_eq!(rtf_text(src), "Привет мир");
+        assert_eq!(rtf_text(src), "Привет мир\n");
         let (out, n) = run_rtf(src, "Привет", "Здравствуй");
         assert_eq!(n, 1);
-        assert_eq!(rtf_text(out.as_bytes()), "Здравствуй мир");
+        assert_eq!(rtf_text(out.as_bytes()), "Здравствуй мир\n");
         assert!(out.contains(r"\u1047?"));
     }
 
@@ -1558,6 +1744,34 @@ mod tests {
     fn rtf_special_characters_are_escaped() {
         let (out, _) = run_rtf(br"{\rtf1\ansi a}", "a", r"{x}\y");
         assert_eq!(out, r"{\rtf1\ansi \{x\}\\y}");
+    }
+
+    #[test]
+    fn rtf_multiline_aligned() {
+        let (out, n) = run_rtf(br"{\rtf1\ansi one\par two}", "one\ntwo", "X\nY");
+        assert_eq!(n, 1);
+        assert_eq!(out, r"{\rtf1\ansi X\par Y}");
+    }
+
+    #[test]
+    fn rtf_multiline_fewer_lines() {
+        let (out, n) = run_rtf(br"{\rtf1\ansi one\par two}", "one\ntwo", "Z");
+        assert_eq!(n, 1);
+        assert_eq!(out, r"{\rtf1\ansi Z}");
+    }
+
+    #[test]
+    fn rtf_multiline_more_lines() {
+        let (out, n) = run_rtf(br"{\rtf1\ansi one\par two}", "one\ntwo", "1\n2\n3");
+        assert_eq!(n, 1);
+        assert_eq!(out, r"{\rtf1\ansi 1\par 2\par 3}");
+    }
+
+    #[test]
+    fn rtf_multiline_does_not_cross_cells() {
+        let (out, n) = run_rtf(br"{\rtf1\ansi \cell one\par two\cell \cell three\par four\cell}", "two\nthree", "X");
+        assert_eq!(n, 0);
+        assert_eq!(out, r"{\rtf1\ansi \cell one\par two\cell \cell three\par four\cell}");
     }
 
     #[test]

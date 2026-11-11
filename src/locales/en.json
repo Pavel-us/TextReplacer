@@ -101,7 +101,7 @@
   "formats.3": "RTF: edited in place, the formatting is kept.",
   "formats.4": "PDF (experimental): only Latin text in simple fonts is found; new characters may be missing from the embedded font.",
   "formats.5": "Old binary files (.doc, .xls, .ppt) are not supported: open them in Word or LibreOffice and save as .docx / .xlsx / .pptx first.",
-  "formats.6": "In documents a match must lie inside one paragraph (in spreadsheets — inside one cell). Formulas, comments and charts are not changed.",
+  "formats.6": "A search in documents may span paragraphs — put several lines with line breaks into Find. Table cells remain barriers. Formulas, comments and charts are not changed.",
   "formats.7": "Tip: run Preview first, and keep .bak backups on for important files.",
   "recipes.intro": "Ready-made regular expressions. Press “Use” to fill in the fields and switch regular expressions on, then adapt them to your case.",
   "recipes.note": "In the replacement, $1, $2… are the parenthesised groups. Write ${1} when a letter or digit follows the group.",

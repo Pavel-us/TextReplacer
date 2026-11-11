@@ -39,7 +39,7 @@ the interface is built with [Tauri](https://tauri.app).
 | PDF *(experimental)* | pdf | Latin text in simple fonts only — see below |
 
 In office formats the formatting is preserved even if a phrase is split into runs with different styles.
-A match must lie within one paragraph (in spreadsheets: within one cell).
+A search may span paragraphs: put several lines into `Find`. Table cells remain barriers — a match cannot cross a cell boundary.
 Not touched: formulas, sheet names, comments, charts, document properties.
 
 ### Legacy formats (.doc, .xls, .ppt)
@@ -51,7 +51,7 @@ save it as `.docx` / `.xlsx` / `.pptx`, then process the new file.
 ### RTF
 
 `.rtf` is edited **in place** by a built-in parser: only the text is replaced, all formatting control words stay.
-Text split by bold / italic / colour changes is still found. A match cannot span paragraphs, table cells or line breaks.
+Text split by bold / italic / colour changes is still found. A search may span paragraphs (put line breaks into `Find`), but not table cells.
 Code pages (`\ansicpg`, per-font charsets: 1250–1258, 874, 866, KOI8) and `\uN` escapes are handled; replacement text is written as `\uN` escapes.
 
 ### PDF limitations
