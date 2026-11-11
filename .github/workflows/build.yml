@@ -1,4 +1,4 @@
-name: Build
+name: Release
 
 on:
   push:
@@ -6,17 +6,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  notes:
+    name: Release notes
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.n.outputs.body }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: n
+        run: |
+          # the text under "## [x.y.z]" in CHANGELOG.md becomes the release notes
+          # (and is shown in the in-app update window)
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" 'index($0, "## [" v "]") == 1 {f=1; next} /^## \[/ {if (f) exit} f {print}' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "See CHANGELOG.md" > notes.md; fi
+          { echo "body<<NOTES_EOF_7c1e"; cat notes.md; echo "NOTES_EOF_7c1e"; } >> "$GITHUB_OUTPUT"
+
   build:
+    needs: notes
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            bin: src-tauri/target/release/text-replacer.exe
-          - os: ubuntu-22.04
-            bin: src-tauri/target/release/text-replacer
-          - os: macos-latest
-            bin: src-tauri/target/release/text-replacer
+        os: [windows-latest, ubuntu-22.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,15 +47,37 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - name: Check translations
         run: node scripts/check-locales.mjs
-      - name: Engine tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Check updater signing setup
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY is not set. See README, section 'Releases and automatic updates'."
+            exit 1
+          fi
+          if grep -q "PASTE_PUBLIC_KEY_HERE" src-tauri/tauri.conf.json; then
+            echo "::error::The updater public key is not set in src-tauri/tauri.conf.json. Run: node scripts/set-updater-key.mjs <key.pub>"
+            exit 1
+          fi
       - run: npm install
-      - run: npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: Text Replacer ${{ github.ref_name }}
+          releaseBody: ${{ needs.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+      - name: Keep build files of manual runs
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
         with:
           name: TextReplacer-${{ matrix.os }}
           path: |
-            ${{ matrix.bin }}
             src-tauri/target/release/bundle/**/*.msi
             src-tauri/target/release/bundle/**/*-setup.exe
             src-tauri/target/release/bundle/**/*.deb
@@ -50,20 +85,3 @@ jobs:
             src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.dmg
           if-no-files-found: warn
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - run: |
-          cd artifacts
-          for d in */; do (cd "$d" && zip -r "../${d%/}.zip" .); done
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*.zip

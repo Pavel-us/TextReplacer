@@ -2,11 +2,41 @@
 
 All notable changes are documented here. / Все заметные изменения описаны здесь.
 
+## [1.3.0] — unreleased / не выпущено
+
+<!-- lang:en -->
+### Added
+- Help window (the **?** button, top right): quick start, supported formats and ten ready-made regular-expression recipes that can be applied with one click.
+- Automatic update check with a window that shows what is new. Windows, macOS and AppImage update in place; .deb / .rpm installs get a link to the downloads page. This is the first version with updates, so install it manually once.
+- The app is listed in the "Office" category of Linux application menus.
+
+### Changed
+- In regular-expression mode, replacement text with line breaks now follows the file's line-ending style (LF / CRLF).
+
+### Removed
+- Automatic conversion of old .doc / .xls / .ppt files: it lost fonts and tables and could alter the text. These files are now skipped with a hint — save them as .docx / .xlsx / .pptx in Word or LibreOffice first.
+
+<!-- lang:ru -->
+### Добавлено
+- Окно справки (кнопка **?** справа вверху): быстрый старт, поддерживаемые форматы и десять готовых рецептов регулярных выражений, применяемых одним нажатием.
+- Автоматическая проверка обновлений с окном «что нового». Windows, macOS и AppImage обновляются на месте; для установки из .deb / .rpm показывается ссылка на страницу загрузки. Это первая версия с обновлением, поэтому установите её вручную один раз.
+- Приложение отображается в разделе «Офис» меню приложений Linux.
+
+### Изменено
+- В режиме регулярных выражений переводы строк в тексте замены теперь соответствуют стилю файла (LF / CRLF).
+
+### Удалено
+- Автоматическая конвертация старых файлов .doc / .xls / .ppt: она теряла шрифты и таблицы и могла искажать текст. Такие файлы теперь пропускаются с подсказкой — сначала сохраните их как .docx / .xlsx / .pptx в Word или LibreOffice.
+
 ## [1.2.0] — unreleased / не выпущено
 
 ### Changed / Изменено
 - LibreOffice is no longer used. Legacy `.doc` / `.xls` / `.ppt` are converted by a built-in converter to `.docx` / `.xlsx` / `.pptx` and saved next to the original (the original is never modified).
   LibreOffice больше не используется. Старые `.doc` / `.xls` / `.ppt` конвертируются встроенным конвертером в `.docx` / `.xlsx` / `.pptx` и сохраняются рядом с оригиналом (оригинал не меняется).
+
+### Changed / Изменено (menu)
+- The app is listed in the "Office" category of Linux application menus.
+  Приложение отображается в разделе «Офис» меню приложений Linux.
 
 ### Added / Добавлено
 - `.rtf` is edited in place by a built-in parser (code pages, `\uN`, formatting kept).

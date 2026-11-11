@@ -1,0 +1,12 @@
+[
+  {"id": "spaces",      "find": "[ \\t]{2,}",                       "repl": " ",                         "sample": "a   b\t\tc",                  "result": "a b c"},
+  {"id": "trailing",    "find": "[ \\t]+$",                         "repl": "",                          "sample": "a  \nb\t\nc",                 "result": "a\nb\nc"},
+  {"id": "empty_lines", "find": "^[ \\t]*\\n",                      "repl": "",                          "sample": "a\n\n  \nb\n",                "result": "a\nb\n"},
+  {"id": "date",        "find": "(\\d{2})\\.(\\d{2})\\.(\\d{4})",    "repl": "${3}-${2}-${1}",            "sample": "Due 31.12.2026",              "result": "Due 2026-12-31"},
+  {"id": "names",       "find": "(\\w+), (\\w+)",                   "repl": "${2} ${1}",                 "sample": "Smith, John",                 "result": "John Smith"},
+  {"id": "html",        "find": "<[^>]+>",                          "repl": "",                          "sample": "<b>Hi</b> there",            "result": "Hi there"},
+  {"id": "quotes",      "find": "\"([^\"]*)\"",                     "repl": "«${1}»",                    "sample": "say \"hello\"",              "result": "say «hello»"},
+  {"id": "domain",      "find": "https?://old\\.example\\.com",     "repl": "https://new.example.com",   "sample": "http://old.example.com/a",    "result": "https://new.example.com/a"},
+  {"id": "phone",       "find": "(\\d{3})-(\\d{3})-(\\d{4})",       "repl": "(${1}) ${2}-${3}",          "sample": "555-123-4567",                "result": "(555) 123-4567"},
+  {"id": "parens",      "find": "\\s*\\([^)]*\\)",                  "repl": "",                          "sample": "Report (draft) final",       "result": "Report final"}
+]

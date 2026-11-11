@@ -1,10 +1,14 @@
 {
   "identifier": "default",
-  "description": "Права главного окна",
-  "windows": ["main"],
+  "description": "Main window permissions",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "dialog:default",
-    "opener:default"
+    "opener:default",
+    "updater:default",
+    "process:default"
   ]
 }

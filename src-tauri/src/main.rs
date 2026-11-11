@@ -72,6 +72,17 @@ fn user_locales(app: AppHandle) -> Vec<String> {
     out
 }
 
+/// In-app updating works on Windows, macOS and AppImage only:
+/// .deb / .rpm installations are managed by the system package manager.
+#[tauri::command]
+fn can_self_update() -> bool {
+    if cfg!(target_os = "linux") {
+        std::env::var_os("APPIMAGE").is_some()
+    } else {
+        true
+    }
+}
+
 const LOCALE_TEMPLATE: &str = include_str!("../../src/locales/en.json");
 
 /// Creates the translations folder and `_template.json`; returns the template path.
@@ -90,12 +101,15 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             run_replace,
             load_rules,
             inspect_path,
             user_locales,
-            prepare_locales_dir
+            prepare_locales_dir,
+            can_self_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Tauri application");

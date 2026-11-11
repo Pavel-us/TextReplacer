@@ -18,6 +18,7 @@ Thanks for helping out! Bug reports, ideas, translations and code are all welcom
 | `src-tauri/src/main.rs` | Tauri commands |
 | `src/` | Frontend (plain HTML/CSS/JS, no bundler) |
 | `src/locales/` | Translations |
+| `src/recipes.json` | Regex recipes shown in Help (every recipe is verified by `cargo test`; titles live in the locale files as `recipe.<id>.title` / `.desc`) |
 | `scripts/check-locales.mjs` | Translation validator (runs in CI) |
 
 ### Adding a language
@@ -53,6 +54,7 @@ Users can also add a language **without rebuilding**: see "Languages" in the REA
 | `src-tauri/src/main.rs` | Команды Tauri |
 | `src/` | Интерфейс (чистые HTML/CSS/JS, без сборщика) |
 | `src/locales/` | Переводы |
+| `src/recipes.json` | Рецепты regex для справки (каждый проверяется в `cargo test`; названия лежат в файлах переводов как `recipe.<id>.title` / `.desc`) |
 | `scripts/check-locales.mjs` | Проверка переводов (запускается в CI) |
 
 ### Как добавить язык

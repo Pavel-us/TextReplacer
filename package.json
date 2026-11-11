@@ -1,6 +1,6 @@
 {
   "name": "text-replacer",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "scripts": {
     "tauri": "tauri",
@@ -8,7 +8,9 @@
     "build": "tauri build",
     "icons": "tauri icon app-icon.png",
     "check:locales": "node scripts/check-locales.mjs",
-    "test": "npm run check:locales && cargo test --manifest-path src-tauri/Cargo.toml"
+    "test": "npm run check:locales && cargo test --manifest-path src-tauri/Cargo.toml",
+    "build:local": "tauri build --config src-tauri/tauri.nosign.conf.json",
+    "set-updater-key": "node scripts/set-updater-key.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

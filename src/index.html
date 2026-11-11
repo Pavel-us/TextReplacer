@@ -48,6 +48,12 @@
   </aside>
 
   <main class="main">
+    <header class="topbar">
+      <button id="updateBadge" class="pill hidden" data-i18n="update.badge"></button>
+      <div class="spacer"></div>
+      <button id="helpBtn" class="btn icon" data-i18n-title="help.open_title">?</button>
+    </header>
+
     <section class="editors">
       <div>
         <label class="lbl" for="find" data-i18n="find.label"></label>
@@ -90,6 +96,74 @@
       <div id="empty" class="empty muted"></div>
     </div>
   </main>
+</div>
+
+<div id="helpModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2 data-i18n="help.title"></h2>
+      <button id="helpClose" class="btn icon" data-i18n-title="common.close">✕</button>
+    </div>
+    <div id="helpTabs" class="tabs">
+      <button class="tab active" data-tab="about" data-i18n="help.tab.about"></button>
+      <button class="tab" data-tab="start" data-i18n="help.tab.start"></button>
+      <button class="tab" data-tab="formats" data-i18n="help.tab.formats"></button>
+      <button class="tab" data-tab="recipes" data-i18n="help.tab.recipes"></button>
+    </div>
+    <div class="modal-body">
+      <section id="tab-about" class="tabpane">
+        <div class="about-brand">
+          <div class="logo big">T</div>
+          <div>
+            <h3>Text Replacer</h3>
+            <p id="aboutVersion" class="muted"></p>
+          </div>
+        </div>
+        <p data-i18n="about.desc"></p>
+        <p class="muted small" data-i18n="about.license"></p>
+        <div class="row gap">
+          <button id="checkUpdates" class="btn" data-i18n="about.check"></button>
+          <button id="openRepo" class="btn" data-i18n="about.github"></button>
+          <button id="openDocs" class="btn" data-i18n="about.docs"></button>
+        </div>
+        <label class="switch about-auto">
+          <input type="checkbox" id="opt-autoUpdate" checked>
+          <span class="tr"></span>
+          <span class="tx" data-i18n="about.auto"></span>
+        </label>
+        <p id="aboutStatus" class="muted small"></p>
+      </section>
+      <section id="tab-start" class="tabpane hidden"><ol id="startList" class="help-list"></ol></section>
+      <section id="tab-formats" class="tabpane hidden"><ul id="formatsList" class="help-list"></ul></section>
+      <section id="tab-recipes" class="tabpane hidden">
+        <p data-i18n="recipes.intro"></p>
+        <p class="muted small" data-i18n="recipes.note"></p>
+        <div id="recipesList" class="recipes"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div id="updateModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 data-i18n="update.title"></h2>
+    </div>
+    <div class="modal-body">
+      <p id="updateText"></p>
+      <h4 class="notes-title" data-i18n="update.notes"></h4>
+      <div id="updateNotes" class="notes"></div>
+      <progress id="updProgress" class="hidden" max="100" value="0"></progress>
+      <p id="updateMsg" class="muted small"></p>
+    </div>
+    <div class="modal-foot">
+      <button id="updSkip" class="btn" data-i18n="update.skip"></button>
+      <div class="spacer"></div>
+      <button id="updLater" class="btn" data-i18n="update.later"></button>
+      <button id="updNow" class="btn primary" data-i18n="update.now"></button>
+      <button id="updPage" class="btn primary hidden" data-i18n="update.open_page"></button>
+    </div>
+  </div>
 </div>
 
 <div id="drop" class="drop hidden"><div data-i18n="drop.hint"></div></div>

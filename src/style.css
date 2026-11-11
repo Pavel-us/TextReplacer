@@ -111,3 +111,46 @@ tbody tr:hover { background: var(--hover); }
 .drop { position: fixed; inset: 0; z-index: 10; background: rgba(37,99,235,.18); backdrop-filter: blur(2px); display: grid; place-items: center; pointer-events: none; }
 .drop > div { padding: 28px 44px; border-radius: 16px; border: 2px dashed var(--accent); background: var(--panel); font-size: 18px; font-weight: 600; box-shadow: var(--shadow); }
 
+
+/* top bar */
+.topbar { display: flex; align-items: center; gap: 10px; margin: -6px 0 -4px; }
+.btn.icon { width: 34px; height: 34px; padding: 0; border-radius: 50%; display: grid; place-items: center; font-weight: 700; }
+.pill { border: none; cursor: pointer; background: var(--accent); color: #fff; font-weight: 600; padding: 5px 12px; border-radius: 20px; }
+.pill:hover { background: var(--accent-h); }
+
+/* modals */
+.modal { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.45); display: grid; place-items: center; padding: 24px; }
+.modal-card { width: min(560px, 100%); max-height: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.35); display: flex; flex-direction: column; overflow: hidden; }
+.modal-card.wide { width: min(860px, 100%); height: min(640px, 100%); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 8px; }
+.modal-head h2 { margin: 0; font-size: 18px; }
+.modal-body { padding: 8px 18px 14px; overflow-y: auto; flex: 1; user-select: text; }
+.modal-foot { display: flex; gap: 8px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--border); }
+.tabs { display: flex; gap: 4px; padding: 0 14px; border-bottom: 1px solid var(--border); }
+.tab { background: none; border: none; border-bottom: 2px solid transparent; padding: 9px 12px; cursor: pointer; color: var(--muted); font-weight: 600; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.about-brand { display: flex; gap: 14px; align-items: center; margin: 8px 0 12px; }
+.about-brand h3 { margin: 0; font-size: 22px; }
+.about-brand p { margin: 0; }
+.logo.big { width: 56px; height: 56px; font-size: 30px; border-radius: 15px; }
+.about-auto { margin: 14px 0 6px; }
+.help-list { padding-left: 22px; line-height: 1.6; }
+.help-list li { margin: 6px 0; }
+
+/* recipes */
+.recipes { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.recipe { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.recipe-head { display: flex; align-items: center; gap: 10px; }
+.recipe-head h4 { margin: 0; flex: 1; font-size: 14px; }
+.recipe p { margin: 4px 0 8px; color: var(--muted); }
+.recipe code { display: block; font: 12.5px/1.5 ui-monospace, "SF Mono", Consolas, monospace; background: var(--field); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; margin: 2px 0 6px; white-space: pre-wrap; word-break: break-all; }
+.recipe .k { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+
+/* update dialog */
+.notes-title { margin: 14px 0 6px; font-size: 13px; color: var(--muted); }
+.notes { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px 12px; background: var(--field); }
+.notes h4 { margin: 10px 0 4px; font-size: 13px; }
+.notes ul { margin: 4px 0; padding-left: 20px; }
+.notes p { margin: 6px 0; }
+progress { width: 100%; height: 8px; margin-top: 12px; accent-color: var(--accent); }

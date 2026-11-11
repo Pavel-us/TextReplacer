@@ -42,8 +42,6 @@ pub struct Request {
     pub dry: bool,
     /// 0 = no limit
     pub max_size_mb: u64,
-    /// Convert legacy .doc/.xls/.ppt to .docx/.xlsx/.pptx (the result is saved next to the original)
-    pub convert_legacy: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,7 +75,11 @@ impl Compiled {
         if self.is_regex {
             let mut s = String::new();
             caps.expand(&self.repl, &mut s);
-            s
+            if s.contains('\n') {
+                s.replace("\r\n", "\n").replace('\n', nl)
+            } else {
+                s
+            }
         } else {
             self.repl.replace('\n', nl)
         }
@@ -253,8 +255,6 @@ fn write_atomic(path: &Path, bytes: &[u8], meta: &fs::Metadata, backup: bool) ->
 enum Outcome {
     Unchanged,
     Changed(usize),
-    /// Legacy file converted to a new file: (replacements, new file name)
-    Converted(usize, String),
     Skipped(String),
 }
 
@@ -703,89 +703,18 @@ fn process_pdf(_p: &Path, _m: &fs::Metadata, _r: &[Compiled], _o: &Request) -> R
     Ok(Outcome::Skipped("skip.no_pdf".into()))
 }
 
-// ───────────── legacy binary formats (.doc .xls .ppt): built-in converter ─────────────
+// ───────────── legacy binary formats (.doc .xls .ppt) ─────────────
 
-struct LegacyFmt {
-    modern_ext: &'static str,
-    kind: Kind,
-}
-
-fn legacy_fmt(path: &Path) -> Option<LegacyFmt> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    Some(match ext.as_str() {
-        "doc" => LegacyFmt { modern_ext: "docx", kind: Kind::Word },
-        "xls" => LegacyFmt { modern_ext: "xlsx", kind: Kind::Excel },
-        "ppt" => LegacyFmt { modern_ext: "pptx", kind: Kind::Slides },
-        _ => return None,
-    })
-}
-
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new() -> std::io::Result<Self> {
-        static N: AtomicUsize = AtomicUsize::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "text-replacer-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&p)?;
-        Ok(TempDir(p))
-    }
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Converts a legacy file into its modern equivalent with the `office_oxide` crate.
-/// A panic inside the parser is turned into an ordinary error.
-fn convert_legacy(src: &Path, dst: &Path) -> Res<()> {
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), String> {
-        let doc = office_oxide::Document::open(src).map_err(|e| e.to_string())?;
-        doc.save_as(dst).map_err(|e| e.to_string())
-    }));
-    match r {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(format!("err.convert_failed\u{1f}{e}").into()),
-        Err(_) => Err("err.convert_failed\u{1f}internal error".into()),
-    }
-}
-
-/// .doc/.xls/.ppt -> temporary .docx/.xlsx/.pptx -> replace -> save next to the original.
-/// The original file is never touched.
-fn process_legacy(path: &Path, rules: &[Compiled], o: &Request, fmt: &LegacyFmt) -> Res<Outcome> {
-    let dest = path.with_extension(fmt.modern_ext);
-    if dest.exists() {
-        let name = dest.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
-        return Ok(Outcome::Skipped(format!("skip.dest_exists\u{1f}{name}")));
-    }
-    let tmp = TempDir::new()?;
-    let stem = path
-        .file_stem()
-        .map(|x| x.to_string_lossy().to_string())
-        .unwrap_or_else(|| "document".to_string());
-    let converted = tmp.path().join(format!("{stem}.{}", fmt.modern_ext));
-    convert_legacy(path, &converted)?;
-    let mut o2 = o.clone();
-    o2.backup = false;
-    let meta2 = fs::metadata(&converted)?;
-    let n = match process_zip_doc(fmt.kind, &converted, &meta2, rules, &o2)? {
-        Outcome::Changed(n) => n,
-        other => return Ok(other),
-    };
-    if o.dry {
-        return Ok(Outcome::Changed(n));
-    }
-    fs::copy(&converted, &dest)?;
-    let name = dest.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
-    Ok(Outcome::Converted(n, name))
+/// Old binary Office files cannot be edited safely in place, and automatic conversion
+/// loses fonts and tables, so they are reported as skipped.
+fn is_legacy_binary(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            let e = e.to_ascii_lowercase();
+            e == "doc" || e == "xls" || e == "ppt"
+        })
+        .unwrap_or(false)
 }
 
 // ───────────── RTF: edited in place, formatting is kept ─────────────
@@ -1275,10 +1204,7 @@ fn process_file(path: &Path, rules: &[Compiled], o: &Request) -> Result<Outcome,
     if o.max_size_mb > 0 && meta.len() > o.max_size_mb.saturating_mul(1024 * 1024) {
         return Ok(Outcome::Skipped(format!("skip.too_big\u{1f}{}", o.max_size_mb)));
     }
-    if let Some(fmt) = legacy_fmt(path) {
-        if o.convert_legacy {
-            return process_legacy(path, rules, o, &fmt).map_err(|e| e.to_string());
-        }
+    if is_legacy_binary(path) {
         return Ok(Outcome::Skipped("skip.legacy".into()));
     }
     let r = if let Some(kind) = doc_kind(path) {
@@ -1347,11 +1273,6 @@ where
                     changed.fetch_add(1, Ordering::Relaxed);
                     replaced.fetch_add(n, Ordering::Relaxed);
                     emit(FileEvent { path, status: "ok".into(), count: n, info: String::new() });
-                }
-                Ok(Outcome::Converted(n, name)) => {
-                    changed.fetch_add(1, Ordering::Relaxed);
-                    replaced.fetch_add(n, Ordering::Relaxed);
-                    emit(FileEvent { path, status: "ok".into(), count: n, info: name });
                 }
                 Ok(Outcome::Skipped(why)) => {
                     skipped.fetch_add(1, Ordering::Relaxed);
@@ -1532,13 +1453,44 @@ mod tests {
     }
 
     #[test]
-    fn legacy_formats_detected() {
-        assert_eq!(legacy_fmt(Path::new("dir/Report.DOC")).unwrap().modern_ext, "docx");
-        assert_eq!(legacy_fmt(Path::new("a.xls")).unwrap().modern_ext, "xlsx");
-        assert_eq!(legacy_fmt(Path::new("a.ppt")).unwrap().modern_ext, "pptx");
-        assert!(legacy_fmt(Path::new("a.docx")).is_none());
-        assert!(legacy_fmt(Path::new("a.rtf")).is_none());
-        assert!(legacy_fmt(Path::new("noext")).is_none());
+    fn legacy_binary_formats_detected() {
+        assert!(is_legacy_binary(Path::new("dir/Report.DOC")));
+        assert!(is_legacy_binary(Path::new("a.xls")));
+        assert!(is_legacy_binary(Path::new("a.ppt")));
+        assert!(!is_legacy_binary(Path::new("a.docx")));
+        assert!(!is_legacy_binary(Path::new("a.rtf")));
+        assert!(!is_legacy_binary(Path::new("noext")));
+    }
+
+    #[test]
+    fn regex_replacement_newlines_follow_file_style() {
+        let o = Request { regex: true, ..req() };
+        let c = compile(&rule("a", "x\ny"), &o).unwrap();
+        assert_eq!(apply_rules("a", &c, "\r\n").0, "x\r\ny");
+        assert_eq!(apply_rules("a", &c, "\n").0, "x\ny");
+    }
+
+    #[derive(Deserialize)]
+    struct Recipe {
+        id: String,
+        find: String,
+        repl: String,
+        sample: String,
+        result: String,
+    }
+
+    /// Every recipe shown in the help window must really work with this engine.
+    #[test]
+    fn regex_recipes_work() {
+        let list: Vec<Recipe> = serde_json::from_str(include_str!("../../src/recipes.json")).unwrap();
+        assert!(list.len() >= 10);
+        for r in list {
+            let o = Request { regex: true, case_sensitive: true, ..Default::default() };
+            let c = compile(&rule(&r.find, &r.repl), &o).unwrap_or_else(|e| panic!("{}: {}", r.id, e));
+            let (out, n) = apply_rules(&r.sample, &c, "\n");
+            assert!(n >= 1, "recipe {} did not match its sample", r.id);
+            assert_eq!(out, r.result, "recipe {}", r.id);
+        }
     }
 
     fn rtf_text(data: &[u8]) -> String {

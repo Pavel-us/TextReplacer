@@ -44,8 +44,19 @@ const html = read(join(root, "src", "index.html"));
 for (const m of html.matchAll(/data-i18n(?:-ph|-title)?="([^"]+)"/g)) used.add(m[1]);
 const js = read(join(root, "src", "main.js"));
 // every quoted literal that looks like an i18n key (covers ternaries, tables, etc.)
-const PREFIXES = "app|folder|mask|opt|maxsize|theme|lang|find|repl|btn|rules|rule|results|status|stat|row|dlg|drop";
-for (const m of js.matchAll(new RegExp(`"((?:${PREFIXES})\\.[A-Za-z_.]+)"`, "g"))) used.add(m[1]);
+const PREFIXES = "app|folder|mask|opt|maxsize|theme|lang|find|repl|btn|rules|rule|results|status|stat|row|dlg|drop|common|help|about|recipes|update";
+for (const m of js.matchAll(new RegExp(`"((?:${PREFIXES})\\.[A-Za-z_.]+)"`, "g"))) {
+  if (!m[1].endsWith(".json")) used.add(m[1]); // file names are not keys
+}
+// numbered help texts (start.1 ... , formats.1 ...) are rendered in a loop
+for (const k of Object.keys(ref)) if (/^(start|formats)\.\d+$/.test(k)) used.add(k);
+// every recipe in recipes.json needs a title and a description
+const recipes = JSON.parse(read(join(root, "src", "recipes.json")));
+for (const r of recipes) {
+  used.add(`recipe.${r.id}.title`);
+  used.add(`recipe.${r.id}.desc`);
+  for (const f of ["id", "find", "repl", "sample", "result"]) if (typeof r[f] !== "string") err(`recipes.json: "${r.id}" has no string field "${f}"`);
+}
 const rs = read(join(root, "src-tauri", "src", "engine.rs"));
 for (const m of rs.matchAll(/"((?:skip|err)\.[a-z0-9_]+)/g)) used.add(m[1]);
 

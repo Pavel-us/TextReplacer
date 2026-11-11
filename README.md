@@ -20,7 +20,9 @@ the interface is built with [Tauri](https://tauri.app).
 - Auto-detects encodings (UTF-8, UTF-16, cp1251) and keeps line-ending style (LF / CRLF)
 - Drag-and-drop a folder or file into the window
 - Dark / light / system theme, remembered settings
-- Legacy `.doc` / `.xls` / `.ppt` converted to `.docx` / `.xlsx` / `.pptx`, and `.rtf` edited in place — no LibreOffice needed
+- `.rtf` edited in place with formatting kept
+- Built-in help (**?** button) with a quick start and ten ready-made regular-expression recipes
+- Automatic update check that shows what is new before updating
 - **Interface languages**: English and Russian, more can be added without rebuilding
 
 ## Supported formats
@@ -32,7 +34,7 @@ the interface is built with [Tauri](https://tauri.app).
 | Excel | xlsx, xlsm, xltx, xltm | string cell values (shared and inline strings) |
 | PowerPoint | pptx, pptm, potx, potm, ppsx, ppsm | slide and notes text |
 | LibreOffice / OpenOffice | odt, ods, odp, odg, ott, ots, otp, otg | `content.xml`, `styles.xml` (incl. headers/footers) |
-| Legacy Office | doc, xls, ppt | converted by the built-in converter to docx / xlsx / pptx (the original is untouched) — see below |
+| Legacy Office | doc, xls, ppt | not supported — save as docx / xlsx / pptx first (such files are skipped with a hint) |
 | RTF | rtf | edited in place, formatting kept (Cyrillic and other code pages supported) |
 | PDF *(experimental)* | pdf | Latin text in simple fonts only — see below |
 
@@ -42,18 +44,9 @@ Not touched: formulas, sheet names, comments, charts, document properties.
 
 ### Legacy formats (.doc, .xls, .ppt)
 
-Binary Word 97 / Excel 97 / PowerPoint 97 files cannot be edited safely in place, so the app converts them
-**with its own built-in converter** (no Office or LibreOffice needed):
-
-1. the file is converted to `.docx` / `.xlsx` / `.pptx` in a temporary folder (fonts, sizes, colours, tables, headers and images are carried over),
-2. the replacement is done there,
-3. the result is saved **next to the original** as a new file; the original is never modified.
-   If the target file already exists, the legacy file is skipped (edit the existing `.docx` instead).
-
-Only files that actually contain a match produce a new file. The option can be switched off in the sidebar.
-Limitations: the converter is young, so check the result on complex documents; spreadsheet formulas become values;
-`.doc` / `.xls` / `.ppt` cannot be saved back in the old format.
-Conversion uses the [`office_oxide`](https://crates.io/crates/office_oxide) crate (MIT / Apache-2.0).
+Old binary Word 97 / Excel 97 / PowerPoint 97 files are **skipped** (the results table says so). They cannot be edited safely in place,
+and automatic conversion turned out to lose fonts and tables and even alter the text. Open such a file in Word or LibreOffice,
+save it as `.docx` / `.xlsx` / `.pptx`, then process the new file.
 
 ### RTF
 
@@ -77,6 +70,21 @@ For serious PDF editing, convert to docx, edit, and export back. The PDF module 
 
 Ready-made builds (Windows `.msi`/`.exe`, Linux `.deb`/`.AppImage`, macOS `.dmg`) are published on the
 [Releases](https://github.com/Pavel-us/TextReplacer/releases) page.
+
+## Help and recipes
+
+The **?** button in the top right corner opens the help window: a quick start, the list of supported formats and ten ready-made
+regular-expression recipes (collapse spaces, reformat dates, strip HTML tags, change a domain …). **Use** fills in the fields
+and switches regular expressions on — then adapt the recipe to your case.
+
+## Updates
+
+On startup the app looks for a newer version on GitHub Releases (this can be switched off in Help → About) and, if there is one,
+shows a window with **what's new**. You decide: update now, later, or skip this version.
+Windows, macOS and AppImage update themselves (the download is verified by a signature); a `.deb` / `.rpm` installation
+cannot update itself, so the window offers the downloads page instead. Installing the new `.deb` over the old one is enough.
+
+On Linux the `.deb` package puts the app into the **Office** category of the application menu.
 
 ## Usage
 
@@ -130,10 +138,27 @@ npm run test       # translations check + engine unit tests
 Cross-compilation is not supported: build on each target OS, or let GitHub Actions do it
 (**Actions → Build → Run workflow**, or push a `v*` tag to get a Release with archives).
 
+## Releases and automatic updates
+
+*For maintainers.* Updates are signed, so a key pair is needed once:
+
+1. `npx tauri signer generate -w ~/.tauri/textreplacer.key` (an empty password is fine).
+2. `node scripts/set-updater-key.mjs ~/.tauri/textreplacer.key.pub`, then commit `src-tauri/tauri.conf.json`.
+3. On GitHub: *Settings → Secrets and variables → Actions → New repository secret*:
+   `TAURI_SIGNING_PRIVATE_KEY` = the whole content of `~/.tauri/textreplacer.key`
+   (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if you set a password).
+4. **Back up the private key.** If it is lost, installed copies can no longer be updated.
+
+To publish a version: describe the changes in `CHANGELOG.md` under `## [x.y.z]` using the `<!-- lang:en -->` / `<!-- lang:ru -->`
+markers (this text becomes the release notes and the "what's new" in the update window), raise the version in `package.json`,
+`src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, then push a tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+The workflow builds all platforms, signs the files, creates the release and uploads `latest.json`.
+Local builds without signing: `npm run build:local`.
+
 ## Project layout
 
 ```text
-src/                  frontend (HTML/CSS/JS) and src/locales/ translations
+src/                  frontend (HTML/CSS/JS), src/locales/ translations, src/recipes.json regex recipes
 src-tauri/src/        engine.rs (search & replace engine) and main.rs (Tauri commands)
 scripts/              check-locales.mjs — translation validator
 .github/workflows/    CI and release builds

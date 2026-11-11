@@ -12,7 +12,6 @@
     ["regex", "opt.regex", false],
     ["backup", "opt.backup", true],
     ["binary", "opt.binary", false],
-    ["convertLegacy", "opt.convertLegacy", true],
   ];
 
   // ───────────────────────── i18n ─────────────────────────
@@ -108,7 +107,8 @@
     try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; }
   }
   function saveSettings() {
-    const s = { folder: $("folder").value, mask: $("mask").value, maxsize: $("maxsize").value, theme: $("theme").value, lang };
+    const s = { folder: $("folder").value, mask: $("mask").value, maxsize: $("maxsize").value, theme: $("theme").value, lang,
+      autoUpdate: $("opt-autoUpdate").checked };
     for (const [k] of OPTS) s["o_" + k] = $("opt-" + k).checked;
     try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* ignore */ }
   }
@@ -130,6 +130,7 @@
   if (st.maxsize !== undefined) $("maxsize").value = st.maxsize;
   for (const [k] of OPTS) if (("o_" + k) in st) $("opt-" + k).checked = st["o_" + k];
   $("theme").value = st.theme || "system";
+  if ("autoUpdate" in st) $("opt-autoUpdate").checked = st.autoUpdate;
 
   function applyTheme() {
     const v = $("theme").value;
@@ -207,6 +208,7 @@
     renderStatus();
     renderEmpty();
     renderStats();
+    renderHelp();
     document.querySelectorAll("#rows tr").forEach((tr) => {
       tr.lastChild.textContent = statusText(tr.dataset.status, tr.dataset.info, tr.dataset.dry === "1");
     });
@@ -338,7 +340,6 @@
       ignoreWs: $("opt-ignoreWs").checked, regex: $("opt-regex").checked,
       backup: $("opt-backup").checked, binary: $("opt-binary").checked,
       dry, maxSizeMb: Math.max(0, Math.floor(Number($("maxsize").value) || 0)),
-      convertLegacy: $("opt-convertLegacy").checked,
     };
 
     lastDry = dry; lastFolder = folder; lastStats = null; pending = [];
@@ -369,12 +370,238 @@
   $("dry").onclick = () => start(true);
   $("run").onclick = () => start(false);
 
+  // ───────────────────────── help, recipes, about ─────────────────────────
+  const REPO = "https://github.com/Pavel-us/TextReplacer";
+  let recipes = [];
+  let appVersion = "";
+  let aboutState = null;   // { key, args }
+
+  function openUrl(url) {
+    T.opener.openUrl(url).catch((e) => console.warn("openUrl failed", e));
+  }
+  function showModal(id) { $(id).classList.remove("hidden"); }
+  function hideModal(id) { $(id).classList.add("hidden"); }
+
+  function selectTab(name) {
+    document.querySelectorAll("#helpTabs .tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+    for (const n of ["about", "start", "formats", "recipes"]) $("tab-" + n).classList.toggle("hidden", n !== name);
+  }
+
+  // numbered texts: start.1, start.2, ... / formats.1, ...
+  function fillList(listId, prefix) {
+    const ul = $(listId);
+    ul.textContent = "";
+    for (let i = 1; lookup(lang, `${prefix}.${i}`) !== undefined || lookup(FALLBACK, `${prefix}.${i}`) !== undefined; i++) {
+      const li = document.createElement("li");
+      li.textContent = t(`${prefix}.${i}`);
+      ul.appendChild(li);
+    }
+  }
+
+  const vis = (s) => s.replace(/\t/g, "⇥").replace(/\r?\n/g, "↵");
+
+  function codeBlock(labelKey, text) {
+    const frag = document.createDocumentFragment();
+    const k = document.createElement("div"); k.className = "k"; k.textContent = t(labelKey);
+    const c = document.createElement("code"); c.textContent = text;
+    frag.append(k, c);
+    return frag;
+  }
+
+  function applyRecipe(r) {
+    $("find").value = r.find;
+    $("repl").value = r.repl;
+    $("opt-regex").checked = true;
+    saveSettings();
+    hideModal("helpModal");
+    $("find").focus();
+  }
+
+  function renderRecipes() {
+    const box = $("recipesList");
+    box.textContent = "";
+    for (const r of recipes) {
+      const card = document.createElement("div"); card.className = "recipe";
+      const head = document.createElement("div"); head.className = "recipe-head";
+      const h = document.createElement("h4"); h.textContent = t(`recipe.${r.id}.title`);
+      const use = document.createElement("button"); use.className = "btn"; use.textContent = t("recipes.use");
+      use.onclick = () => applyRecipe(r);
+      head.append(h, use);
+      const p = document.createElement("p"); p.textContent = t(`recipe.${r.id}.desc`);
+      const shown = r.repl === "" ? "∅" : /^\s+$/.test(r.repl) ? "␣" : r.repl;
+      card.append(head, p, codeBlock("recipes.find", r.find), codeBlock("recipes.repl", shown),
+        codeBlock("recipes.example", `${vis(r.sample)}  →  ${vis(r.result)}`));
+      box.appendChild(card);
+    }
+  }
+
+  function setAbout(key, ...args) {
+    aboutState = key ? { key, args } : null;
+    $("aboutStatus").textContent = aboutState ? t(key, ...args) : "";
+  }
+
+  function renderHelp() {
+    fillList("startList", "start");
+    fillList("formatsList", "formats");
+    renderRecipes();
+    $("aboutVersion").textContent = appVersion ? t("about.version", appVersion) : "";
+    $("aboutStatus").textContent = aboutState ? t(aboutState.key, ...aboutState.args) : "";
+    renderUpdateDialog();
+  }
+
+  $("helpBtn").onclick = () => { selectTab("about"); showModal("helpModal"); };
+  $("helpClose").onclick = () => hideModal("helpModal");
+  $("helpModal").addEventListener("click", (e) => { if (e.target === $("helpModal")) hideModal("helpModal"); });
+  document.querySelectorAll("#helpTabs .tab").forEach((b) => { b.onclick = () => selectTab(b.dataset.tab); });
+  $("openRepo").onclick = () => openUrl(REPO);
+  $("openDocs").onclick = () => openUrl(`${REPO}/blob/main/${lang === "ru" ? "README.ru.md" : "README.md"}`);
+  $("checkUpdates").onclick = () => checkForUpdate(true);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !updating) { hideModal("helpModal"); hideModal("updateModal"); }
+  });
+
+  // ───────────────────────── updates ─────────────────────────
+  let pendingUpdate = null;
+  let updating = false;
+  let updMsgState = null;   // { key, args }
+  const SKIP_KEY = "text-replacer-skip-version";
+  const getSkip = () => { try { return localStorage.getItem(SKIP_KEY) || ""; } catch { return ""; } };
+  const setSkip = (v) => { try { localStorage.setItem(SKIP_KEY, v); } catch { /* ignore */ } };
+
+  // release notes carry per-language sections: <!-- lang:en --> ... <!-- lang:ru --> ...
+  function pickNotes(body) {
+    const marks = [...String(body || "").matchAll(/<!--\s*lang:([a-z-]+)\s*-->/gi)];
+    if (!marks.length) return String(body || "");
+    const parts = {};
+    marks.forEach((m, i) => {
+      const start = m.index + m[0].length;
+      const end = i + 1 < marks.length ? marks[i + 1].index : body.length;
+      parts[m[1].toLowerCase()] = body.slice(start, end).trim();
+    });
+    return parts[lang] || parts[lang.split("-")[0]] || parts[FALLBACK] || Object.values(parts)[0] || "";
+  }
+
+  const stripMd = (s) => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
+
+  // tiny, safe markdown: headings, bullets, paragraphs (everything goes through textContent)
+  function renderMd(text, el) {
+    el.textContent = "";
+    let ul = null;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trimEnd();
+      if (!line.trim()) { ul = null; continue; }
+      let m;
+      if ((m = /^#{1,6}\s+(.*)$/.exec(line))) {
+        ul = null;
+        const h = document.createElement("h4"); h.textContent = stripMd(m[1]); el.appendChild(h);
+      } else if ((m = /^\s*[-*]\s+(.*)$/.exec(line))) {
+        if (!ul) { ul = document.createElement("ul"); el.appendChild(ul); }
+        const li = document.createElement("li"); li.textContent = stripMd(m[1]); ul.appendChild(li);
+      } else {
+        ul = null;
+        const p = document.createElement("p"); p.textContent = stripMd(line); el.appendChild(p);
+      }
+    }
+  }
+
+  function setUpdMsg(key, ...args) {
+    updMsgState = key ? { key, args } : null;
+    $("updateMsg").textContent = updMsgState ? t(key, ...args) : "";
+  }
+
+  function renderUpdateDialog() {
+    if (!pendingUpdate) return;
+    $("updateText").textContent = t("update.text", pendingUpdate.version, appVersion || "?");
+    const notes = pickNotes(pendingUpdate.body).trim();
+    if (notes) renderMd(notes, $("updateNotes"));
+    else $("updateNotes").textContent = t("update.no_notes");
+    $("updateMsg").textContent = updMsgState ? t(updMsgState.key, ...updMsgState.args) : "";
+  }
+
+  function setUpdBusy(b) {
+    updating = b;
+    for (const id of ["updNow", "updLater", "updSkip", "updPage"]) $(id).disabled = b;
+  }
+
+  async function showUpdateDialog() {
+    let canSelf = false;
+    try { canSelf = await invoke("can_self_update"); } catch { canSelf = false; }
+    $("updNow").classList.toggle("hidden", !canSelf);
+    $("updPage").classList.toggle("hidden", canSelf);
+    $("updProgress").classList.add("hidden");
+    setUpdBusy(false);
+    setUpdMsg(canSelf ? null : "update.manual");
+    renderUpdateDialog();
+    showModal("updateModal");
+  }
+
+  async function checkForUpdate(manual) {
+    try {
+      if (manual) setAbout("about.checking");
+      const update = await T.updater.check();
+      if (!update) {
+        if (manual) setAbout("about.uptodate");
+        return;
+      }
+      pendingUpdate = update;
+      $("updateBadge").classList.remove("hidden");
+      if (manual) setAbout(null);
+      if (!manual && getSkip() === update.version) return;
+      await showUpdateDialog();
+    } catch (e) {
+      if (manual) setAbout("about.update_failed", String(e));
+      else console.warn("update check failed:", e);
+    }
+  }
+
+  $("updateBadge").onclick = () => showUpdateDialog();
+  $("updLater").onclick = () => hideModal("updateModal");
+  $("updSkip").onclick = () => {
+    if (pendingUpdate) setSkip(pendingUpdate.version);
+    $("updateBadge").classList.add("hidden");
+    hideModal("updateModal");
+  };
+  $("updPage").onclick = () => openUrl(`${REPO}/releases/latest`);
+  $("updNow").onclick = async () => {
+    const u = pendingUpdate;
+    if (!u || updating) return;
+    setUpdBusy(true);
+    $("updProgress").classList.remove("hidden");
+    $("updProgress").value = 0;
+    let total = 0, got = 0;
+    try {
+      await u.downloadAndInstall((ev) => {
+        if (ev.event === "Started") {
+          total = (ev.data && ev.data.contentLength) || 0;
+          setUpdMsg("update.downloading", 0);
+        } else if (ev.event === "Progress") {
+          got += (ev.data && ev.data.chunkLength) || 0;
+          const pct = total ? Math.min(100, Math.round((got * 100) / total)) : 0;
+          $("updProgress").value = pct;
+          setUpdMsg("update.downloading", pct);
+        } else if (ev.event === "Finished") {
+          $("updProgress").value = 100;
+          setUpdMsg("update.installing");
+        }
+      });
+      setUpdMsg("update.restarting");
+      await T.process.relaunch();
+    } catch (e) {
+      setUpdBusy(false);
+      $("updProgress").classList.add("hidden");
+      setUpdMsg("update.error", String(e));
+    }
+  };
+
   // ───────────────────────── init ─────────────────────────
   (async () => {
     await loadBundled();
     await loadUser();
     lang = detectLang(st.lang);
     populateLangs();
+    try { recipes = await (await fetch("recipes.json")).json(); } catch (e) { console.warn("recipes.json failed", e); }
+    try { appVersion = await T.app.getVersion(); } catch { appVersion = ""; }
     rerender();
+    if ($("opt-autoUpdate").checked) setTimeout(() => checkForUpdate(false), 4000);
   })();
 })();
