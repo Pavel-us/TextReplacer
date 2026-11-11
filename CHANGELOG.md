@@ -4,6 +4,10 @@ All notable changes are documented here. / Все заметные измене�
 
 ## [1.4.0] — 2026-11-11
 
+Multi-line search and replace across paragraph boundaries in office documents (Word, PowerPoint, LibreOffice, RTF). Table cells remain barriers.
+
+Поиск и замена через границы абзацев в офисных документах (Word, PowerPoint, LibreOffice, RTF). Ячейки таблиц остаются барьером.
+
 ### Changed / Изменено
 - Multi-line find now works across paragraph boundaries in .docx/.docm/.dotx/.dotm, .pptx/.pptm/.potx/.potm/.ppsx/.ppsm, .odt/.odp/.ods and .rtf: put several lines with line breaks into `Find`. Table cells remain barriers — a match cannot cross a cell boundary. Single-line finds still match within one paragraph/cell only.
 - Многострочный поиск теперь работает через границы абзацев в .docx/.docm/.dotx/.dotm, .pptx/.pptm/.potx/.potm/.ppsx/.ppsm, .odt/.odp/.ods и .rtf — укажите в «Найти» несколько строк с переносами. Ячейки таблиц остаются барьером: совпадение не выходит за границу ячейки. Однострочные поиски по-прежнему работают внутри одного абзаца/ячейки.
