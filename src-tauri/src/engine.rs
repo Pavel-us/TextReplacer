@@ -89,6 +89,18 @@ impl Compiled {
     }
 }
 
+/// Horizontal blanks: space, tab, no-break and other Unicode spaces. Documents keep such
+/// invisible characters at the end of a line (a line ending in two tabs, a trailing space);
+/// they are lost when the text is copied into the "Find" field.
+const BLANK_CLASS: &str = r"[ \t\x{00A0}\x{1680}\x{2000}-\x{200B}\x{202F}\x{205F}\x{3000}\x{FEFF}]";
+
+fn is_blank(c: char) -> bool {
+    matches!(
+        c,
+        ' ' | '\t' | '\u{00A0}' | '\u{1680}' | '\u{2000}'..='\u{200B}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
+    )
+}
+
 pub fn compile(rules: &[Rule], o: &Request) -> Result<Vec<Compiled>, String> {
     if rules.is_empty() {
         return Err("err.no_rules".into());
@@ -109,12 +121,27 @@ pub fn compile(rules: &[Rule], o: &Request) -> Result<Vec<Compiled>, String> {
             }
             toks.join(r"\s+")
         } else {
-            // exact match, edge spaces are kept; \n also matches \r\n
-            r.find
-                .split('\n')
-                .map(|l| regex::escape(l.trim_end_matches('\r')))
-                .collect::<Vec<_>>()
-                .join(r"\r?\n")
+            // Exact match: the blanks at the very start and end of the text are kept, but around
+            // a line break any blanks are tolerated (see BLANK_CLASS), so a line that ends in
+            // trailing spaces or tabs in the document still matches. \n also matches \r\n.
+            let lines: Vec<&str> = r.find.split('\n').collect();
+            let last = lines.len() - 1;
+            let parts: Vec<String> = lines
+                .iter()
+                .enumerate()
+                .map(|(k, l)| {
+                    let mut l = l.trim_end_matches('\r');
+                    if k > 0 {
+                        l = l.trim_start_matches(is_blank);
+                    }
+                    if k < last {
+                        l = l.trim_end_matches(is_blank);
+                    }
+                    regex::escape(l)
+                })
+                .collect();
+            let sep = format!(r"{BLANK_CLASS}*\r?\n{BLANK_CLASS}*");
+            parts.join(sep.as_str())
         };
         let re = RegexBuilder::new(&pattern)
             .case_insensitive(!o.case_sensitive)
@@ -1552,6 +1579,49 @@ mod tests {
     fn newline_matches_crlf_and_replacement_follows_file_style() {
         let c = compile(&rule("x\ny", "1\n2"), &req()).unwrap();
         assert_eq!(apply_rules("x\r\ny", &c, "\r\n"), ("1\r\n2".to_string(), 1));
+    }
+
+    #[test]
+    fn line_break_ignores_blanks_around_it() {
+        let c = compile(&rule("a\nb", "X"), &req()).unwrap();
+        // spaces, tabs and no-break spaces before the break, blanks after it
+        assert_eq!(apply_rules("a \t\u{a0}\n \tb", &c, "\n"), ("X".to_string(), 1));
+        assert_eq!(apply_rules("a\r\n b", &c, "\r\n"), ("X".to_string(), 1));
+        // blanks typed around the break in the find text do not matter either
+        let c = compile(&rule("a \t\n b", "X"), &req()).unwrap();
+        assert_eq!(apply_rules("a\nb", &c, "\n"), ("X".to_string(), 1));
+    }
+
+    #[test]
+    fn blanks_at_the_edges_of_the_whole_text_stay_exact() {
+        let c = compile(&rule("a\nb ", "X"), &req()).unwrap();
+        assert_eq!(apply_rules("a\nb", &c, "\n").1, 0); // the trailing blank belongs to the text
+        assert_eq!(apply_rules("a\nb ", &c, "\n"), ("X".to_string(), 1));
+        let c = compile(&rule(" a\nb", "X"), &req()).unwrap();
+        assert_eq!(apply_rules("a\nb", &c, "\n").1, 0);
+    }
+
+    #[test]
+    fn empty_line_inside_the_find_text() {
+        let c = compile(&rule("a\n\nb", "X"), &req()).unwrap();
+        assert_eq!(apply_rules("a \n \nb", &c, "\n"), ("X".to_string(), 1));
+        assert_eq!(apply_rules("a\nb", &c, "\n").1, 0);
+    }
+
+    #[test]
+    fn word_block_with_trailing_tabs_and_spaces_is_found() {
+        // the real layout: the first line ends with two tabs, the second with a space
+        let xml = concat!(
+            "<w:p><w:r><w:t>Contractor: A.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:tab/></w:r></w:p>",
+            "<w:p><w:r><w:t>Customer: B. </w:t></w:r></w:p>",
+            "<w:p><w:r><w:t>Date: C</w:t></w:r></w:p>"
+        );
+        let c = compile(&rule("Contractor: A.\t\nCustomer: B.\nDate: C", "1\n2\n3"), &req()).unwrap();
+        let (out, n) = process_part(Kind::Word, "word/document.xml", xml, &c);
+        assert_eq!(n, 1);
+        for s in [">1<", ">2<", ">3<"] {
+            assert!(out.contains(s), "{s} missing in {out}");
+        }
     }
 
     #[test]

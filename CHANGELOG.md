@@ -2,6 +2,16 @@
 
 All notable changes are documented here. / Все заметные изменения описаны здесь.
 
+## [1.4.1] — 2026-11-12
+
+<!-- lang:en -->
+### Fixed
+- Multi-line find now ignores blanks around line breaks. Spaces, tabs and no-break spaces at the end or start of a line no longer prevent a match: documents often keep such invisible characters (for example a line ending in two tabs) and they are lost when the text is copied into the "Find" field. Blanks at the very start and end of the whole text are still matched exactly.
+
+<!-- lang:ru -->
+### Исправлено
+- Многострочный поиск теперь игнорирует пробелы вокруг переносов строк. Пробелы, табуляции и неразрывные пробелы в конце или начале строки больше не мешают найти текст: в документах часто остаются такие невидимые символы (например, строка, заканчивающаяся двумя табуляциями), а при копировании текста в поле «Найти» они теряются. Пробелы в самом начале и в самом конце всего текста по-прежнему сравниваются точно.
+
 ## [1.4.0] — 2026-11-11
 
 Multi-line search and replace across paragraph boundaries in office documents (Word, PowerPoint, LibreOffice, RTF). Table cells remain barriers.
