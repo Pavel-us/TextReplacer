@@ -2,6 +2,16 @@
 
 All notable changes are documented here. / Все заметные изменения описаны здесь.
 
+## [1.4.2] — 2026-11-12
+
+<!-- lang:en -->
+### Fixed
+- You can now copy a line together with the tabs or spaces at its end and replace it with the same text without them. Tabs at the start or end of a paragraph used to be invisible to the search, so a "Find" text containing a tab never matched in Word, LibreOffice and PowerPoint documents. Now they are matched (and removed) when the "Find" text contains a tab, and a regular expression such as `\t+$` can strip them. Without a tab in the "Find" text, trailing tabs are left untouched as before.
+
+<!-- lang:ru -->
+### Исправлено
+- Теперь можно скопировать строку вместе с табуляцией или пробелами в конце и заменить её на тот же текст без них. Табуляции в начале и в конце абзаца раньше были невидимы для поиска, поэтому текст с табуляцией в поле «Найти» не находился в документах Word, LibreOffice и PowerPoint. Теперь такие табуляции находятся (и удаляются), если в поле «Найти» есть табуляция, а регулярное выражение вроде `\t+$` может их убрать. Если в тексте поиска табуляции нет, хвостовые табуляции, как и раньше, остаются нетронутыми.
+
 ## [1.4.1] — 2026-11-12
 
 <!-- lang:en -->

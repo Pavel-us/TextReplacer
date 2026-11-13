@@ -13,6 +13,7 @@ the interface is built with [Tauri](https://tauri.app).
 
 - Recursive folder walk, file name masks (`*.html;*.txt`), `.git` is skipped
 - Multi-line search and replacement; exact matching (edge spaces are preserved; blanks around line breaks are ignored, so trailing spaces and tabs at the end of a line do not matter)
+- A line can be copied together with the tabs or spaces at its end and replaced without them (a tab in the "Find" text also matches tabs at the start or end of a paragraph; a regex such as `\t+$` can strip them)
 - "Whitespace and line breaks don't matter" mode, case-sensitive / insensitive search
 - Regular expressions with capture groups (`$1`, `$2` in the replacement)
 - **Batch replacement**: a list of rules executed in order, or a rules file

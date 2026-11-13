@@ -169,6 +169,9 @@ pub struct Rule<'a> {
     pub re: &'a Regex,
     pub repl: &'a str,
     pub is_regex: bool,
+    /// Tabs and breaks at the start/end of a paragraph are part of its text for this rule
+    /// (the find text mentions a tab). Otherwise they are invisible and kept as they are.
+    pub edge_blanks: bool,
 }
 
 impl Rule<'_> {
@@ -305,7 +308,7 @@ struct Flow {
 
 /// Paragraphs of a part as editable lines. A paragraph that contains other paragraphs
 /// (a text box) is skipped as a whole: its inner paragraphs are lines of their own.
-fn parse_flow(xml: &str, fmt: Fmt) -> Flow {
+fn parse_flow(xml: &str, fmt: Fmt, edge_blanks: bool) -> Flow {
     let tags = scan_tags(xml);
     let mut lines: Vec<Line> = Vec::new();
     let mut segs: Vec<(usize, usize)> = Vec::new();
@@ -329,7 +332,7 @@ fn parse_flow(xml: &str, fmt: Fmt) -> Flow {
                         seg_start = lines.len();
                     }
                     barrier = false;
-                    lines.push(make_line(xml, &tags, fmt, oi, ti));
+                    lines.push(make_line(xml, &tags, fmt, oi, ti, edge_blanks));
                 }
             }
         } else if tags[ti].selfc {
@@ -361,7 +364,7 @@ fn parse_flow(xml: &str, fmt: Fmt) -> Flow {
 }
 
 /// Collects the editable slots of the paragraph between tags `oi` and `ci`.
-fn make_line(xml: &str, tags: &[Tag], fmt: Fmt, oi: usize, ci: usize) -> Line {
+fn make_line(xml: &str, tags: &[Tag], fmt: Fmt, oi: usize, ci: usize, edge_blanks: bool) -> Line {
     let span = (tags[oi].span.0, tags[ci].span.1);
     let mut slots: Vec<Slot> = Vec::new();
     if fmt == Fmt::Odf {
@@ -424,12 +427,14 @@ fn make_line(xml: &str, tags: &[Tag], fmt: Fmt, oi: usize, ci: usize) -> Line {
         }
     }
     let mut first = 0usize;
-    while first < slots.len() && is_ws_slot(&slots[first]) {
-        first += 1;
-    }
     let mut last = slots.len();
-    while last > first && is_ws_slot(&slots[last - 1]) {
-        last -= 1;
+    if !edge_blanks {
+        while first < slots.len() && is_ws_slot(&slots[first]) {
+            first += 1;
+        }
+        while last > first && is_ws_slot(&slots[last - 1]) {
+            last -= 1;
+        }
     }
     let usable = (first, last);
     let text: String = slots[usable.0..usable.1].iter().map(|s| s.text.as_str()).collect();
@@ -864,7 +869,7 @@ mod tests {
 
     fn rule(find: &str, repl: &str) -> Rule<'static> {
         let pat: String = find.split('\n').map(|s| regex::escape(s)).collect::<Vec<_>>().join("\n");
-        Rule { re: Box::leak(Box::new(Regex::new(&pat).unwrap())), repl: Box::leak(repl.to_string().into_boxed_str()), is_regex: true }
+        Rule { re: Box::leak(Box::new(Regex::new(&pat).unwrap())), repl: Box::leak(repl.to_string().into_boxed_str()), is_regex: true, edge_blanks: false }
     }
 
     #[test]
@@ -975,7 +980,7 @@ mod tests {
     fn word_ignore_ws_crosses_paragraphs() {
         let xml = "<w:p><w:t>A</w:t></w:p><w:p><w:t>B</w:t></w:p>";
         let re = Regex::new(r"A\s+B").unwrap();
-        let rule = Rule { re: &re, repl: "X", is_regex: true };
+        let rule = Rule { re: &re, repl: "X", is_regex: true, edge_blanks: false };
         let (out, n) = replace(xml, Fmt::Word, &[rule]);
         assert_eq!(n, 1);
         assert_eq!(out.matches("<w:p").count(), 1);
@@ -1026,7 +1031,7 @@ pub fn replace(xml: &str, fmt: Fmt, rules: &[Rule]) -> (String, usize) {
     let mut cur = xml.to_string();
     let mut total = 0usize;
     for r in rules {
-        let flow = parse_flow(&cur, fmt);
+        let flow = parse_flow(&cur, fmt, r.edge_blanks);
         let mut edits: Vec<Edit> = Vec::new();
         let mut n = 0usize;
         for &(a, b) in &flow.segs {

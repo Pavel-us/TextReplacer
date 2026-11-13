@@ -69,8 +69,10 @@ pub struct Compiled {
     re: Regex,
     repl: String,
     is_regex: bool,
-    /// the pattern may match a paragraph break, so the flow is needed
+    /// the pattern may match a paragraph break (or a tab), so the flow is needed
     spans: bool,
+    /// the pattern mentions a tab: tabs at the start/end of a paragraph must be visible to it
+    edge_blanks: bool,
 }
 
 impl Compiled {
@@ -148,13 +150,19 @@ pub fn compile(rules: &[Rule], o: &Request) -> Result<Vec<Compiled>, String> {
             .multi_line(true)
             .build()
             .map_err(|e| format!("err.regex\u{1f}{n}\u{1f}{e}"))?;
+        // a find text copied together with a trailing tab (or a regex such as `\t+$`) has to see
+        // the tabs that end a paragraph; without a tab in the pattern they stay untouched
+        let edge_blanks = r.find.contains('\t')
+            || (o.regex && (r.find.contains("\\t") || r.find.contains("\\s") || r.find.contains("\\x09")));
         out.push(Compiled {
             re,
             repl: if o.regex { r.repl.clone() } else { r.repl.replace("\r\n", "\n") },
             is_regex: o.regex,
-            // a plain pattern needs the flow only when it contains a line break;
-            // `\s+` of the "ignore whitespace" mode and any regex may cross one as well
-            spans: o.regex || o.ignore_ws || r.find.contains('\n'),
+            // a plain pattern needs the flow only when it contains a line break or a tab
+            // (the per-paragraph path does not see tabs); `\s+` of the "ignore whitespace"
+            // mode and any regex may cross a break as well
+            spans: o.regex || o.ignore_ws || r.find.contains('\n') || r.find.contains('\t'),
+            edge_blanks,
         });
     }
     Ok(out)
@@ -583,7 +591,7 @@ fn process_part(kind: Kind, name: &str, xml: &str, rules: &[Compiled]) -> (Strin
         return (xml.to_string(), 0);
     }
     if rules.iter().any(|c| c.spans) {
-        let rules: Vec<FlowRule> = rules.iter().map(|c| FlowRule { re: &c.re, repl: &c.repl, is_regex: c.is_regex }).collect();
+        let rules: Vec<FlowRule> = rules.iter().map(|c| FlowRule { re: &c.re, repl: &c.repl, is_regex: c.is_regex, edge_blanks: c.edge_blanks }).collect();
         flow_replace(xml, fmt, &rules)
     } else {
         match kind {
@@ -1622,6 +1630,63 @@ mod tests {
         for s in [">1<", ">2<", ">3<"] {
             assert!(out.contains(s), "{s} missing in {out}");
         }
+    }
+
+    fn tab_count(s: &str) -> usize {
+        s.matches("<w:tab/>").count()
+    }
+
+    const TWO_TABS: &str = concat!(
+        "<w:p><w:r><w:t>Object: A.</w:t></w:r><w:r><w:tab/></w:r><w:r><w:tab/></w:r></w:p>",
+        "<w:p><w:r><w:t>Customer: B.</w:t></w:r></w:p>"
+    );
+
+    #[test]
+    fn word_trailing_tabs_copied_with_the_text_can_be_removed() {
+        // "Object: A." + two tabs is copied from the document and replaced without them
+        let c = compile(&rule("Object: A.\t\t", "Object: A."), &req()).unwrap();
+        let (out, n) = process_part(Kind::Word, "word/document.xml", TWO_TABS, &c);
+        assert_eq!(n, 1);
+        assert_eq!(tab_count(&out), 0, "{out}");
+        assert!(out.contains("Object: A.</w:t>"), "{out}");
+        assert!(out.contains("Customer: B."), "{out}");
+    }
+
+    #[test]
+    fn word_one_tab_in_the_find_removes_exactly_one_tab() {
+        let c = compile(&rule("A.\t", "A."), &req()).unwrap();
+        let (out, n) = process_part(Kind::Word, "word/document.xml", TWO_TABS, &c);
+        assert_eq!(n, 1);
+        assert_eq!(tab_count(&out), 1, "{out}");
+    }
+
+    #[test]
+    fn word_trailing_tabs_stay_when_the_find_has_none() {
+        // single line, and a line break between two paragraphs: the tabs are not touched
+        let c = compile(&rule("Object: A.", "X"), &req()).unwrap();
+        let (out, n) = process_part(Kind::Word, "word/document.xml", TWO_TABS, &c);
+        assert_eq!((n, tab_count(&out)), (1, 2));
+        let c = compile(&rule("Object: A.\nCustomer: B.", "X\nY"), &req()).unwrap();
+        let (out, n) = process_part(Kind::Word, "word/document.xml", TWO_TABS, &c);
+        assert_eq!((n, tab_count(&out)), (1, 2), "{out}");
+    }
+
+    #[test]
+    fn word_regex_can_strip_trailing_tabs() {
+        let o = Request { regex: true, ..req() };
+        let c = compile(&rule(r"\t+$", ""), &o).unwrap();
+        let (out, n) = process_part(Kind::Word, "word/document.xml", TWO_TABS, &c);
+        assert_eq!(n, 1);
+        assert_eq!(tab_count(&out), 0, "{out}");
+    }
+
+    #[test]
+    fn word_trailing_spaces_are_matched_and_removed() {
+        let xml = "<w:p><w:r><w:t xml:space=\"preserve\">Text.   </w:t></w:r></w:p>";
+        let c = compile(&rule("Text.   ", "Text."), &req()).unwrap();
+        let (out, n) = process_part(Kind::Word, "word/document.xml", xml, &c);
+        assert_eq!(n, 1);
+        assert!(out.contains(">Text.<"), "{out}");
     }
 
     #[test]
