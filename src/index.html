@@ -32,25 +32,33 @@
     <input id="maxsize" type="number" min="0" step="1" value="100">
 
     <div class="spacer"></div>
-
-    <label class="lbl" for="lang" data-i18n="lang.label"></label>
-    <div class="row">
-      <select id="lang"></select>
-      <button id="openLoc" class="btn" data-i18n-title="lang.open_title">📂</button>
-    </div>
-
-    <label class="lbl" for="theme" data-i18n="theme.label"></label>
-    <select id="theme">
-      <option value="system" data-i18n="theme.system"></option>
-      <option value="dark" data-i18n="theme.dark"></option>
-      <option value="light" data-i18n="theme.light"></option>
-    </select>
   </aside>
 
   <main class="main">
     <header class="topbar">
       <button id="updateBadge" class="pill hidden" data-i18n="update.badge"></button>
       <div class="spacer"></div>
+      <div class="pop-wrap">
+        <button id="settingsBtn" class="btn icon" data-i18n-title="settings.title">⚙</button>
+        <div id="settingsPop" class="pop hidden">
+          <label class="lbl" for="lang" data-i18n="lang.label"></label>
+          <div class="row">
+            <select id="lang"></select>
+            <button id="openLoc" class="btn" data-i18n-title="lang.open_title">📂</button>
+          </div>
+          <label class="lbl" for="theme" data-i18n="theme.label"></label>
+          <select id="theme">
+            <option value="system" data-i18n="theme.system"></option>
+            <option value="dark" data-i18n="theme.dark"></option>
+            <option value="light" data-i18n="theme.light"></option>
+          </select>
+          <label class="switch pop-switch">
+            <input type="checkbox" id="opt-autoUpdate" checked>
+            <span class="tr"></span>
+            <span class="tx" data-i18n="about.auto"></span>
+          </label>
+        </div>
+      </div>
       <button id="helpBtn" class="btn icon" data-i18n-title="help.open_title">?</button>
     </header>
 
@@ -68,6 +76,7 @@
     <div class="row gap">
       <button id="addRule" class="btn" data-i18n="btn.add"></button>
       <button id="loadRules" class="btn" data-i18n="btn.load"></button>
+      <button id="saveRules" class="btn" data-i18n="btn.save"></button>
       <span class="muted small" data-i18n="rules.hint"></span>
     </div>
 
@@ -83,12 +92,13 @@
     <div id="stats" class="stats"></div>
 
     <div class="results">
-      <table>
+      <table id="resTable">
+        <colgroup><col id="colFile"><col id="colCount"><col id="colStatus"></colgroup>
         <thead>
           <tr>
-            <th data-i18n="results.th.file"></th>
-            <th class="num" data-i18n="results.th.count"></th>
-            <th data-i18n="results.th.status"></th>
+            <th><span data-i18n="results.th.file"></span><i class="grip" data-col="0"></i></th>
+            <th class="num"><span data-i18n="results.th.count"></span><i class="grip" data-col="1"></i></th>
+            <th><span data-i18n="results.th.status"></span><i class="grip" data-col="2"></i></th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -126,11 +136,6 @@
           <button id="openRepo" class="btn" data-i18n="about.github"></button>
           <button id="openDocs" class="btn" data-i18n="about.docs"></button>
         </div>
-        <label class="switch about-auto">
-          <input type="checkbox" id="opt-autoUpdate" checked>
-          <span class="tr"></span>
-          <span class="tx" data-i18n="about.auto"></span>
-        </label>
         <p id="aboutStatus" class="muted small"></p>
       </section>
       <section id="tab-start" class="tabpane hidden"><ol id="startList" class="help-list"></ol></section>

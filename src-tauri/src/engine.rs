@@ -1556,6 +1556,89 @@ pub fn load_rules(path: &str, regex: bool) -> Result<Vec<Rule>, String> {
     Ok(rules)
 }
 
+// ───────────── rule templates (.trtpl) ─────────────
+
+pub const TEMPLATE_FORMAT: &str = "trtpl";
+pub const TEMPLATE_VERSION: u32 = 1;
+
+/// The switches that change what a rule means. Folder, backups and other run settings are
+/// deliberately not part of a template. Absent = leave the current setting alone.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TemplateOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regex: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_sensitive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_ws: Option<bool>,
+}
+
+/// A saved scenario: the list of rules plus the file mask and the switches they rely on.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Template {
+    pub format: String,
+    pub version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mask: Option<String>,
+    pub options: TemplateOptions,
+    pub rules: Vec<Rule>,
+}
+
+/// What a rules file contained: a template, or a plain list of rules (`template` is None).
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadedRules {
+    pub template: Option<Template>,
+    pub rules: Vec<Rule>,
+}
+
+/// Writes a template. The rules are checked first, so that a file which could never be run
+/// is not created. Returns the path that was written (".trtpl" is added when missing).
+pub fn save_template(path: &str, mut tpl: Template) -> Result<String, String> {
+    tpl.format = TEMPLATE_FORMAT.to_string();
+    tpl.version = TEMPLATE_VERSION;
+    tpl.mask = tpl.mask.take().filter(|m| !m.trim().is_empty() && m.trim() != "*");
+    let probe = Request {
+        regex: tpl.options.regex.unwrap_or(false),
+        case_sensitive: tpl.options.case_sensitive.unwrap_or(false),
+        ignore_ws: tpl.options.ignore_ws.unwrap_or(false),
+        ..Default::default()
+    };
+    compile(&tpl.rules, &probe)?;
+    let mut target = path.to_string();
+    if Path::new(&target).extension().is_none() {
+        target.push_str(".trtpl");
+    }
+    let mut json = serde_json::to_string_pretty(&tpl).map_err(|e| e.to_string())?;
+    json.push('\n');
+    fs::write(&target, json).map_err(|e| e.to_string())?;
+    Ok(target)
+}
+
+/// Reads a `.trtpl` template, or — for any other file — a plain list of rules
+/// (`find<TAB>replace` per line, see `load_rules`).
+pub fn load_rules_file(path: &str, regex: bool) -> Result<LoadedRules, String> {
+    let data = fs::read(path).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&data);
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    if !text.starts_with('{') {
+        let rules = load_rules(path, regex)?;
+        return Ok(LoadedRules { template: None, rules });
+    }
+    let tpl: Template = serde_json::from_str(text).map_err(|_| "err.tpl_invalid".to_string())?;
+    if tpl.format != TEMPLATE_FORMAT {
+        return Err("err.tpl_invalid".into());
+    }
+    if tpl.version > TEMPLATE_VERSION {
+        return Err("err.tpl_newer".into());
+    }
+    if tpl.rules.is_empty() {
+        return Err("err.no_rules_in_file".into());
+    }
+    Ok(LoadedRules { rules: tpl.rules.clone(), template: Some(tpl) })
+}
+
 // ───────────── tests ─────────────
 
 #[cfg(test)]
@@ -1630,6 +1713,92 @@ mod tests {
         for s in [">1<", ">2<", ">3<"] {
             assert!(out.contains(s), "{s} missing in {out}");
         }
+    }
+
+    fn tmp_file(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("trtpl-test-{}-{}", std::process::id(), name))
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn sample_template() -> Template {
+        Template {
+            mask: Some("*.docx".into()),
+            options: TemplateOptions { regex: Some(true), case_sensitive: Some(false), ignore_ws: None },
+            rules: vec![
+                Rule { find: "(\\w+), (\\w+)".into(), repl: "${2} ${1}".into() },
+                Rule { find: "a\nb\t".into(), repl: "line 1\nline 2".into() },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn template_round_trip_keeps_rules_mask_and_options() {
+        let p = tmp_file("roundtrip.trtpl");
+        assert_eq!(save_template(&p, sample_template()).unwrap(), p);
+        let loaded = load_rules_file(&p, false).unwrap();
+        let tpl = loaded.template.expect("a template");
+        assert_eq!((tpl.format.as_str(), tpl.version), ("trtpl", 1));
+        assert_eq!(tpl.mask.as_deref(), Some("*.docx"));
+        assert_eq!(tpl.options.regex, Some(true));
+        assert_eq!(tpl.options.case_sensitive, Some(false));
+        assert_eq!(tpl.options.ignore_ws, None);
+        assert_eq!(loaded.rules.len(), 2);
+        // line breaks, tabs and the group syntax survive unchanged
+        assert_eq!(loaded.rules[1].find, "a\nb\t");
+        assert_eq!(loaded.rules[1].repl, "line 1\nline 2");
+        assert_eq!(loaded.rules[0].repl, "${2} ${1}");
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn template_extension_is_added_and_default_mask_is_dropped() {
+        let p = tmp_file("noext");
+        let mut tpl = sample_template();
+        tpl.mask = Some(" * ".into());
+        let written = save_template(&p, tpl).unwrap();
+        assert!(written.ends_with(".trtpl"), "{written}");
+        let loaded = load_rules_file(&written, false).unwrap();
+        assert_eq!(loaded.template.unwrap().mask, None);
+        let _ = fs::remove_file(&written);
+    }
+
+    #[test]
+    fn template_with_a_broken_rule_is_not_written() {
+        let p = tmp_file("broken.trtpl");
+        let mut tpl = sample_template();
+        tpl.rules.push(Rule { find: "(unclosed".into(), repl: "x".into() });
+        let err = save_template(&p, tpl).unwrap_err();
+        assert!(err.starts_with("err.regex"), "{err}");
+        assert!(!Path::new(&p).exists());
+        let none = Template { rules: vec![], ..sample_template() };
+        assert_eq!(save_template(&p, none).unwrap_err(), "err.no_rules");
+    }
+
+    #[test]
+    fn rules_file_loading_tells_templates_from_plain_lists() {
+        let tsv = tmp_file("plain.txt");
+        // the file text is:  x\\y<TAB>z   (two backslashes), which unescapes to  x\y
+        let content = format!("# comment\nold\tnew\n{}\tz\n", r"x\\y");
+        fs::write(&tsv, content).unwrap();
+        let l = load_rules_file(&tsv, false).unwrap();
+        assert!(l.template.is_none());
+        assert_eq!(l.rules.len(), 2);
+        assert_eq!(l.rules[1].find, "x\\y");
+        let _ = fs::remove_file(&tsv);
+
+        let bad = tmp_file("bad.trtpl");
+        fs::write(&bad, "{ not json").unwrap();
+        assert_eq!(load_rules_file(&bad, false).unwrap_err(), "err.tpl_invalid");
+        fs::write(&bad, r#"{"format":"other","rules":[{"find":"a","repl":"b"}]}"#).unwrap();
+        assert_eq!(load_rules_file(&bad, false).unwrap_err(), "err.tpl_invalid");
+        fs::write(&bad, r#"{"format":"trtpl","version":99,"rules":[{"find":"a","repl":"b"}]}"#).unwrap();
+        assert_eq!(load_rules_file(&bad, false).unwrap_err(), "err.tpl_newer");
+        fs::write(&bad, r#"{"format":"trtpl","version":1,"rules":[]}"#).unwrap();
+        assert_eq!(load_rules_file(&bad, false).unwrap_err(), "err.no_rules_in_file");
+        let _ = fs::remove_file(&bad);
     }
 
     fn tab_count(s: &str) -> usize {

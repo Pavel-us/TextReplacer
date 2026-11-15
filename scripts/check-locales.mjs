@@ -46,7 +46,7 @@ const js = read(join(root, "src", "main.js"));
 // every quoted literal that looks like an i18n key (covers ternaries, tables, etc.)
 const PREFIXES = "app|folder|mask|opt|maxsize|theme|lang|find|repl|btn|rules|rule|results|status|stat|row|dlg|drop|common|help|about|recipes|update";
 for (const m of js.matchAll(new RegExp(`"((?:${PREFIXES})\\.[A-Za-z_.]+)"`, "g"))) {
-  if (!m[1].endsWith(".json")) used.add(m[1]); // file names are not keys
+  if (!/\.(json|trtpl)$/.test(m[1])) used.add(m[1]); // file names are not keys
 }
 // numbered help texts (start.1 ... , formats.1 ...) are rendered in a loop
 for (const k of Object.keys(ref)) if (/^(start|formats)\.\d+$/.test(k)) used.add(k);

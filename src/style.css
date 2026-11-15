@@ -95,12 +95,12 @@ textarea { resize: none; height: 100%; min-height: 100px; font: 13px/1.5 ui-mono
 .stat.err b { color: var(--err); }
 
 .results { flex: 1; min-height: 0; overflow: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; position: relative; }
-table { width: 100%; border-collapse: collapse; }
-thead th { position: sticky; top: 0; background: var(--panel); text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 9px 12px; border-bottom: 1px solid var(--border); z-index: 1; }
-td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
-td.path { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+thead th { white-space: nowrap; position: sticky; top: 0; background: var(--panel); text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 9px 12px; border-bottom: 1px solid var(--border); z-index: 1; }
+td { padding: 7px 12px; border-bottom: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.path { direction: rtl; text-align: left; }
 td.path bdi { direction: ltr; unicode-bidi: plaintext; }
-.num { text-align: center; width: 120px; }
+.num { text-align: center; }
 tbody tr { cursor: default; }
 tbody tr:hover { background: var(--hover); }
 .s-ok { color: var(--ok); font-weight: 600; }
@@ -154,3 +154,18 @@ tbody tr:hover { background: var(--hover); }
 .notes ul { margin: 4px 0; padding-left: 20px; }
 .notes p { margin: 6px 0; }
 progress { width: 100%; height: 8px; margin-top: 12px; accent-color: var(--accent); }
+
+/* settings pop-over (gear) */
+.pop-wrap { position: relative; }
+.pop { position: absolute; z-index: 30; right: 0; top: calc(100% + 8px); width: 260px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 4px 14px 14px; }
+.pop .lbl { margin-top: 10px; }
+.pop .pop-switch { margin-top: 14px; }
+#settingsBtn { font-size: 16px; }
+
+/* resizable columns of the results table */
+.grip { position: absolute; top: 0; right: -4px; width: 9px; height: 100%; display: block; cursor: col-resize; touch-action: none; z-index: 2; }
+.grip::after { content: ""; position: absolute; left: 4px; top: 25%; height: 50%; width: 1px; background: var(--border); }
+.grip:hover::after, .grip.act::after { background: var(--accent); width: 2px; left: 3px; }
+body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none !important; }
+.grip[data-col="2"] { right: 0; width: 6px; }
+.grip[data-col="2"]::after { left: 3px; }

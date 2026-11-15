@@ -24,6 +24,18 @@ fn load_rules(path: String, regex: bool) -> Result<Vec<engine::Rule>, String> {
     engine::load_rules(&path, regex)
 }
 
+/// Saves the rule list (with the mask and switches) as a `.trtpl` template; returns the path.
+#[tauri::command]
+fn save_template(path: String, template: engine::Template) -> Result<String, String> {
+    engine::save_template(&path, template)
+}
+
+/// Opens a `.trtpl` template or a plain `find<TAB>replace` list.
+#[tauri::command]
+fn load_rules_file(path: String, regex: bool) -> Result<engine::LoadedRules, String> {
+    engine::load_rules_file(&path, regex)
+}
+
 #[derive(Serialize)]
 struct PathInfo {
     dir: String,
@@ -107,6 +119,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             run_replace,
             load_rules,
+            save_template,
+            load_rules_file,
             inspect_path,
             user_locales,
             prepare_locales_dir,

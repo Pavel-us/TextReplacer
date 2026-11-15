@@ -20,7 +20,9 @@ the interface is built with [Tauri](https://tauri.app).
 - **Preview** (dry run), `.bak` backups, atomic writes, file size limit
 - Auto-detects encodings (UTF-8, UTF-16, cp1251) and keeps line-ending style (LF / CRLF)
 - Drag-and-drop a folder or file into the window
-- Dark / light / system theme, remembered settings
+- Dark / light / system theme, remembered settings; language, theme and update check live in the ⚙ settings pop-over
+- **Save** the rule list as a `.trtpl` template (rules + file mask + switches) and load it back later
+- Resizable columns in the results table (drag a border, double-click to fit)
 - `.rtf` edited in place with formatting kept
 - Built-in help (**?** button) with a quick start and ten ready-made regular-expression recipes
 - Automatic update check that shows what is new before updating
@@ -91,11 +93,13 @@ On Linux the `.deb` package puts the app into the **Office** category of the app
 
 1. Choose a folder (or drop it into the window) and, optionally, a file name mask.
 2. Type the text to find and the replacement. Click **＋ Add to list** to build a batch of rules,
-   or load rules from a file.
+   or load rules from a file. **Save…** keeps the list (with the file mask and switches) as a `.trtpl` template.
 3. Click **Preview** to see what would change, then **Replace**.
 4. Double-click a row in the results to open the file's folder.
 
-**Rules file format** — one rule per line, `find<TAB>replace`; `\n` and `\t` are allowed; lines starting with `#` are comments:
+**Templates (`.trtpl`)** are JSON files made by **Save…**: the rules, the file mask and the regex / case / whitespace switches. Loading a template replaces the current list (after a confirmation); folder, backups and other run settings are not stored.
+
+**Plain rules file format** — one rule per line, `find<TAB>replace`; `\n` and `\t` are allowed; lines starting with `#` are comments:
 
 ```text
 # old brand -> new brand

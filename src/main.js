@@ -92,6 +92,8 @@
 
   // ───────────────────────── state ─────────────────────────
   const rules = [];
+  const cols = { w: [0, 120], statusMin: 300, touched: false };   // widths of the results table
+  const COL_MIN = [120, 70, 120];
   let running = false;
   let lastDry = false;
   let lastFolder = "";
@@ -108,7 +110,8 @@
   }
   function saveSettings() {
     const s = { folder: $("folder").value, mask: $("mask").value, maxsize: $("maxsize").value, theme: $("theme").value, lang,
-      autoUpdate: $("opt-autoUpdate").checked };
+      autoUpdate: $("opt-autoUpdate").checked,
+      cols: { w: cols.w, statusMin: cols.statusMin, touched: cols.touched } };
     for (const [k] of OPTS) s["o_" + k] = $("opt-" + k).checked;
     try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* ignore */ }
   }
@@ -131,6 +134,11 @@
   for (const [k] of OPTS) if (("o_" + k) in st) $("opt-" + k).checked = st["o_" + k];
   $("theme").value = st.theme || "system";
   if ("autoUpdate" in st) $("opt-autoUpdate").checked = st.autoUpdate;
+  if (st.cols && Array.isArray(st.cols.w)) {
+    cols.w = [Math.max(COL_MIN[0], Number(st.cols.w[0]) || 0), Math.max(COL_MIN[1], Number(st.cols.w[1]) || 120)];
+    cols.statusMin = Math.max(COL_MIN[2], Number(st.cols.statusMin) || 300);
+    cols.touched = !!st.cols.touched;
+  }
 
   function applyTheme() {
     const v = $("theme").value;
@@ -211,6 +219,7 @@
     renderHelp();
     document.querySelectorAll("#rows tr").forEach((tr) => {
       tr.lastChild.textContent = statusText(tr.dataset.status, tr.dataset.info, tr.dataset.dry === "1");
+      tr.lastChild.title = tr.lastChild.textContent;
     });
   }
 
@@ -223,12 +232,69 @@
     renderRules();
   };
 
+  // the rule list plus the pair typed in the fields (if any)
+  function collectWork() {
+    const work = rules.slice();
+    const f = $("find").value;
+    if (f) work.push({ find: f, repl: $("repl").value });
+    return work;
+  }
+
+  // a template restores the whole scenario: rules, mask and the switches the rules rely on
+  function applyTemplate(tpl) {
+    rules.length = 0;
+    rules.push(...tpl.rules);
+    $("mask").value = tpl.mask || "*";
+    const o = tpl.options || {};
+    if (typeof o.regex === "boolean") $("opt-regex").checked = o.regex;
+    if (typeof o.caseSensitive === "boolean") $("opt-caseSensitive").checked = o.caseSensitive;
+    if (typeof o.ignoreWs === "boolean") $("opt-ignoreWs").checked = o.ignoreWs;
+    renderRules();
+    saveSettings();
+  }
+
   $("loadRules").onclick = async () => {
     try {
-      const p = await T.dialog.open({ multiple: false, directory: false, title: t("dlg.rules_dialog") });
+      const p = await T.dialog.open({
+        multiple: false, directory: false, title: t("dlg.rules_dialog"),
+        filters: [{ name: t("dlg.tpl_filter"), extensions: ["trtpl"] }, { name: t("dlg.all_files"), extensions: ["*"] }],
+      });
       if (typeof p !== "string") return;
-      rules.push(...(await invoke("load_rules", { path: p, regex: $("opt-regex").checked })));
-      renderRules();
+      const res = await invoke("load_rules_file", { path: p, regex: $("opt-regex").checked });
+      if (res.template) {
+        // a template replaces the list (the switches apply to the whole run, so mixing would change old rules)
+        if (rules.length) {
+          const ok = await T.dialog.ask(t("dlg.replace_list", rules.length), {
+            title: t("dlg.confirm.title"), kind: "warning", okLabel: t("dlg.yes"), cancelLabel: t("dlg.no"),
+          });
+          if (!ok) return;
+        }
+        applyTemplate(res.template);
+      } else {
+        rules.push(...res.rules);   // a plain find<TAB>replace list is appended
+        renderRules();
+      }
+      setStatus("status.loaded", res.rules.length);
+    } catch (e) { notify(tb(e), "error"); }
+  };
+
+  $("saveRules").onclick = async () => {
+    try {
+      const work = collectWork();
+      if (!work.length) return notify(t("dlg.nothing"));
+      const p = await T.dialog.save({
+        title: t("dlg.save_dialog"), defaultPath: "rules.trtpl",
+        filters: [{ name: t("dlg.tpl_filter"), extensions: ["trtpl"] }],
+      });
+      if (typeof p !== "string") return;
+      const mask = $("mask").value.trim();
+      const template = {
+        mask: mask && mask !== "*" ? mask : null,
+        options: { regex: $("opt-regex").checked, caseSensitive: $("opt-caseSensitive").checked, ignoreWs: $("opt-ignoreWs").checked },
+        rules: work,
+      };
+      const written = await invoke("save_template", { path: p, template });
+      setStatus("status.saved", written);
     } catch (e) { notify(tb(e), "error"); }
   };
 
@@ -299,6 +365,7 @@
       const td3 = document.createElement("td");
       td3.className = "s-" + e.status;
       td3.textContent = statusText(e.status, e.info, lastDry);
+      td3.title = td3.textContent;
       tr.append(td1, td2, td3);
       frag.appendChild(tr);
     }
@@ -312,6 +379,61 @@
     if (!flushScheduled) { flushScheduled = true; requestAnimationFrame(flush); }
   });
 
+  // ───────────────────────── resizable columns of the results table ─────────────────────────
+  function applyCols() {
+    const avail = document.querySelector(".results").clientWidth;
+    // until the user has moved a border, the File column simply takes the free space
+    if (!cols.touched) cols.w[0] = Math.max(COL_MIN[0], avail - cols.w[1] - cols.statusMin);
+    const total = Math.max(avail, cols.w[0] + cols.w[1] + cols.statusMin);
+    $("resTable").style.width = total + "px";
+    $("colFile").style.width = cols.w[0] + "px";
+    $("colCount").style.width = cols.w[1] + "px";
+    $("colStatus").style.width = total - cols.w[0] - cols.w[1] + "px";
+  }
+
+  function setColWidth(i, w) {
+    w = Math.max(COL_MIN[i], Math.round(w));
+    if (i === 2) cols.statusMin = w; else cols.w[i] = w;
+    cols.touched = true;
+    applyCols();
+  }
+
+  // double click on a border: make the column as wide as its longest content
+  function autofitCol(i) {
+    let w = 0;
+    document.querySelectorAll(`#resTable tr > :nth-child(${i + 1})`).forEach((c) => { w = Math.max(w, c.scrollWidth); });
+    setColWidth(i, w + 4);
+    saveSettings();
+  }
+
+  document.querySelectorAll(".grip").forEach((g) => {
+    const i = Number(g.dataset.col);
+    g.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const startX = ev.clientX;
+      const startW = i === 2 ? $("colStatus").getBoundingClientRect().width : cols.w[i];
+      g.setPointerCapture(ev.pointerId);
+      g.classList.add("act");
+      document.body.classList.add("col-resizing");
+      const move = (e) => setColWidth(i, startW + e.clientX - startX);
+      const up = () => {
+        g.removeEventListener("pointermove", move);
+        g.removeEventListener("pointerup", up);
+        g.removeEventListener("pointercancel", up);
+        g.classList.remove("act");
+        document.body.classList.remove("col-resizing");
+        saveSettings();
+      };
+      g.addEventListener("pointermove", move);
+      g.addEventListener("pointerup", up);
+      g.addEventListener("pointercancel", up);
+    });
+    g.addEventListener("dblclick", (ev) => { ev.stopPropagation(); autofitCol(i); });
+  });
+
+  window.addEventListener("resize", applyCols);
+
   $("rows").addEventListener("dblclick", (ev) => {
     const tr = ev.target.closest("tr");
     if (tr && tr.dataset.path) T.opener.revealItemInDir(tr.dataset.path).catch(() => {});
@@ -320,9 +442,7 @@
   // ───────────────────────── run ─────────────────────────
   async function start(dry) {
     if (running) return;
-    const work = rules.slice();
-    const f = $("find").value;
-    if (f) work.push({ find: f, repl: $("repl").value });
+    const work = collectWork();
     if (!work.length) return notify(t("dlg.nothing"));
     const folder = $("folder").value.trim();
     if (!folder) return notify(t("dlg.no_folder"));
@@ -449,6 +569,13 @@
     renderUpdateDialog();
   }
 
+  // settings pop-over (gear): language, theme, update check
+  const pop = $("settingsPop");
+  $("settingsBtn").onclick = (e) => { e.stopPropagation(); pop.classList.toggle("hidden"); };
+  document.addEventListener("mousedown", (e) => {
+    if (!pop.classList.contains("hidden") && !e.target.closest(".pop-wrap")) pop.classList.add("hidden");
+  });
+
   $("helpBtn").onclick = () => { selectTab("about"); showModal("helpModal"); };
   $("helpClose").onclick = () => hideModal("helpModal");
   $("helpModal").addEventListener("click", (e) => { if (e.target === $("helpModal")) hideModal("helpModal"); });
@@ -457,6 +584,7 @@
   $("openDocs").onclick = () => openUrl(`${REPO}/blob/main/${lang === "ru" ? "README.ru.md" : "README.md"}`);
   $("checkUpdates").onclick = () => checkForUpdate(true);
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") pop.classList.add("hidden");
     if (e.key === "Escape" && !updating) { hideModal("helpModal"); hideModal("updateModal"); }
   });
 
@@ -602,6 +730,7 @@
     try { recipes = await (await fetch("recipes.json")).json(); } catch (e) { console.warn("recipes.json failed", e); }
     try { appVersion = await T.app.getVersion(); } catch { appVersion = ""; }
     rerender();
+    applyCols();
     if ($("opt-autoUpdate").checked) setTimeout(() => checkForUpdate(false), 4000);
   })();
 })();

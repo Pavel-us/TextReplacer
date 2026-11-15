@@ -68,7 +68,7 @@
   "dlg.empty_find": "The “Find” field is empty",
   "dlg.nothing": "Nothing to search for: fill in the “Find” field",
   "dlg.no_folder": "Please specify a folder (you can drop it into the window)",
-  "dlg.rules_dialog": "Rules file (find<TAB>replace)",
+  "dlg.rules_dialog": "Rules file or template (.trtpl)",
   "drop.hint": "Drop to select the folder",
   "skip.legacy": "old binary format — save it as .docx / .xlsx / .pptx first",
   "skip.not_rtf": "not a valid RTF file",
@@ -142,5 +142,15 @@
   "update.restarting": "Restarting…",
   "update.manual": "This installation (.deb / .rpm) cannot update itself. Download the new version from the releases page.",
   "update.open_page": "Open downloads page",
-  "update.error": "Update failed: {0}"
+  "update.error": "Update failed: {0}",
+  "settings.title": "Settings",
+  "btn.save": "Save…",
+  "dlg.save_dialog": "Save the rules as a template",
+  "dlg.tpl_filter": "Text Replacer templates",
+  "dlg.all_files": "All files",
+  "dlg.replace_list": "Replace the current list ({0} rule(s)) with the rules from the template?",
+  "status.saved": "Saved: {0}",
+  "status.loaded": "Loaded {0} rule(s)",
+  "err.tpl_invalid": "This is not a valid Text Replacer template",
+  "err.tpl_newer": "The template was created by a newer version of the program"
 }

@@ -2,6 +2,20 @@
 
 All notable changes are documented here. / Все заметные изменения описаны здесь.
 
+## [1.5.0] — 2026-11-12
+
+<!-- lang:en -->
+### Added
+- Settings (the ⚙ button, top right): language, theme and the update check are now in one pop-over instead of the sidebar.
+- "Save…" stores the list of rules in a `.trtpl` template together with the file mask and the switches the rules rely on (regular expressions, case, whitespace). "Load rules…" restores everything from a template; the current list is replaced after a confirmation. Plain `find<TAB>replace` files are still loaded, and appended to the list.
+- The columns of the results table can be resized by dragging their borders; a double click fits a column to its longest content. The widths are remembered.
+
+<!-- lang:ru -->
+### Добавлено
+- Настройки (кнопка ⚙ справа вверху): язык, тема и проверка обновлений теперь в одном окошке вместо боковой панели.
+- «Сохранить…» записывает список правил в шаблон `.trtpl` вместе с маской файлов и переключателями, от которых зависят правила (регулярные выражения, регистр, пробелы). «Загрузить правила…» восстанавливает всё из шаблона; текущий список заменяется после подтверждения. Обычные файлы `найти<TAB>заменить` по-прежнему загружаются и добавляются к списку.
+- Ширину колонок таблицы результатов можно менять, перетаскивая их границы; двойной щелчок подгоняет колонку под самое длинное содержимое. Ширина запоминается.
+
 ## [1.4.2] — 2026-11-12
 
 <!-- lang:en -->
